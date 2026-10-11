@@ -11,9 +11,15 @@ export interface SentMessage {
   edited?: boolean;
 }
 
+export type SignalOp =
+  | { op: "send"; messageId: string; text: string }
+  | { op: "edit"; messageId: string; text: string }
+  | { op: "attach"; filePath: string; caption?: string };
+
 export class FakeSignal implements SignalPort {
   readonly sent: SentMessage[] = [];
   readonly attachments: { channelId: string; filePath: string; caption?: string }[] = [];
+  readonly ops: SignalOp[] = [];
   private messageHandlers: ((m: IncomingMessage) => void)[] = [];
   private reactionHandlers: ((r: Reaction) => void)[] = [];
   private seq = 0;
@@ -24,6 +30,7 @@ export class FakeSignal implements SignalPort {
   async send(channelId: string, text: string): Promise<OutgoingMessage> {
     const messageId = `msg-${++this.seq}`;
     this.sent.push({ channelId, messageId, text });
+    this.ops.push({ op: "send", messageId, text });
     return { messageId };
   }
 
@@ -35,11 +42,13 @@ export class FakeSignal implements SignalPort {
     } else {
       this.sent.push({ channelId, messageId, text, edited: true });
     }
+    this.ops.push({ op: "edit", messageId, text });
   }
 
   async attach(channelId: string, filePath: string, caption?: string): Promise<OutgoingMessage> {
     const messageId = `att-${++this.seq}`;
     this.attachments.push({ channelId, filePath, caption });
+    this.ops.push({ op: "attach", filePath, ...(caption ? { caption } : {}) });
     return { messageId };
   }
 
