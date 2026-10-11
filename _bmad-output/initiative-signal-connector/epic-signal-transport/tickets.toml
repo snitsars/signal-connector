@@ -1,0 +1,69 @@
+# tickets.toml — epic-signal-transport entries, in build order.
+
+[[entry]]
+id = 1
+type = "story"
+title = "signal-cli daemon manager"
+description = "Locates, spawns, health-checks, and restarts the signal-cli JSON-RPC daemon, exposing its endpoint."
+verify = "The manager starts the daemon, reports healthy, and restarts it after the process is killed."
+covers = ["TC1", "TC6"]
+after = []
+hitl = true
+risk = "high"
+notes = ["Requires Java and signal-cli installed on the host (operator step)."]
+
+[[entry]]
+id = 2
+type = "story"
+title = "JSON-RPC client (send, edit, attach)"
+description = "Speaks the daemon's JSON-RPC for sending text, editing a sent message, and sending attachments, returning the message timestamp."
+verify = "Against a running daemon, send/edit/attach each produce the expected message on the phone."
+covers = ["TC3", "TC4"]
+after = [1]
+hitl = false
+risk = "high"
+unknown = "The exact JSON-RPC method names and params for signal-cli v0.14.x must be confirmed before this starts."
+
+[[entry]]
+id = 3
+type = "story"
+title = "Device-link flow (QR)"
+description = "Runs startLink/finishLink, renders the link URI as a QR for the operator, and stores the account."
+verify = "Scanning the QR links the device; the account appears in the daemon's account list."
+covers = ["TC1"]
+after = [1]
+hitl = true
+risk = "medium"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Receive loop, persistence, and channel filter"
+description = "Subscribes to incoming messages, persists them, and forwards only those in the configured channel."
+verify = "A Note-to-Self message is persisted and forwarded; a message from another chat is persisted but not forwarded."
+covers = ["TC2", "TC5"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "Outbound rate limiter and edit handles"
+description = "Serializes outbound sends under a conservative rate limit and records the returned timestamp as the edit handle."
+verify = "Burst sends are spaced; an edit targets the recorded handle and is not duplicated."
+covers = ["TC7", "TC3"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 6
+type = "story"
+title = "SignalPort adapter wiring and tests"
+description = "Implements SignalPort over the daemon client and wires it in the composition root; adds tests against a fake daemon."
+verify = "The fake-daemon tests pass; the real daemon path works end to end on the host."
+covers = ["TC1", "TC2", "TC3", "TC4", "TC5", "TC6", "TC7"]
+after = [4, 5]
+hitl = false
+risk = "medium"

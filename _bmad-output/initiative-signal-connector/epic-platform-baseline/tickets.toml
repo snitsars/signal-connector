@@ -1,0 +1,57 @@
+# tickets.toml — epic-platform-baseline entries, in build order.
+
+[[entry]]
+id = 1
+type = "story"
+title = "Scaffold the TypeScript service and test harness"
+description = "Creates the ESM TypeScript project, build/lint/test tooling, and a hello entry point that compiles and runs."
+verify = "npm install, npm test, and npm run build all succeed on Windows; the entry point runs."
+covers = ["CS4", "NFR5"]
+after = []
+hitl = true
+risk = "low"
+notes = ["The operator runs npm install (network access) the first time."]
+
+[[entry]]
+id = 2
+type = "story"
+title = "Define core ports and domain types"
+description = "Adds SignalPort and AgentPort interfaces plus the domain types (Project, Task, AgentEvent, PermissionRequest) with in-memory fakes."
+verify = "Unit tests exercise the fakes through the interfaces; core/ imports no adapter."
+covers = ["CS3", "AC6"]
+after = [1]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 3
+type = "story"
+title = "SQLite store and repositories"
+description = "Adds the SQLite schema and repositories for projects, sessions, tasks, approvals, and the message-to-session map."
+verify = "Tests create, read, and update each entity; state survives reopening the database."
+covers = ["CS3"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Config loader and secrets module"
+description = "Loads/creates config.toml under %APPDATA% and reads/writes secrets via Windows Credential Manager."
+verify = "A missing config is created with defaults; a secret round-trips through the secrets module and never appears in logs."
+covers = ["CS1", "CS2"]
+after = [3]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "Logging and console daemon entry point"
+description = "Adds structured logging to file+console and a composition-root entry point with a clean start/stop and a start/stop script."
+verify = "npm run dev starts, logs, and stops cleanly; a log file is written; no secret is logged."
+covers = ["CS4", "NFR4"]
+after = [4]
+hitl = false
+risk = "low"

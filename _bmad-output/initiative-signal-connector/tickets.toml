@@ -1,0 +1,37 @@
+# tickets.toml — the epics of initiative-signal-connector, in build order.
+# tickets.py reads it. Table order is build order.
+
+[[epic]]
+id = 1
+slug = "epic-platform-baseline"
+title = "Platform baseline"
+
+[[epic]]
+id = 2
+slug = "epic-signal-transport"
+title = "Signal transport and channel"
+after = [{ epic = 1, needs = "scaffold, core ports, store" }]
+
+[[epic]]
+id = 3
+slug = "epic-agent-adapter"
+title = "opencode agent adapter"
+after = [{ epic = 1, needs = "scaffold, core ports, store" }]
+
+[[epic]]
+id = 4
+slug = "epic-command-router"
+title = "Command router and conversation"
+after = [
+  { epic = 2, needs = "a working SignalPort (receive/send/edit)" },
+  { epic = 3, needs = "a working AgentPort (start/subscribe/permission)" },
+]
+
+[[epic]]
+id = 5
+slug = "epic-progress-notify"
+title = "Progress tracking and notifications"
+after = [
+  { epic = 3, needs = "the agent event stream" },
+  { epic = 4, needs = "the task lifecycle" },
+]

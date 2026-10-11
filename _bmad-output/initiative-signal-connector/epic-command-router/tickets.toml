@@ -1,0 +1,56 @@
+# tickets.toml — epic-command-router entries, in build order.
+
+[[entry]]
+id = 1
+type = "story"
+title = "Command parser and registry"
+description = "Parses a message into a command or free-form text and dispatches to a registered handler."
+verify = "Each slash command dispatches to its handler; text without a slash is classified as a prompt."
+covers = ["CC1", "CC4"]
+after = []
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 2
+type = "story"
+title = "Active project state and /use, /projects"
+description = "Tracks the active project per channel in the store; /use sets it and /projects lists configured projects."
+verify = "/use switches the active project; /projects lists them; the choice survives a restart."
+covers = ["CC3"]
+after = [1]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 3
+type = "story"
+title = "Free-form routing and /task, /stop, /new"
+description = "Routes free-form text and /task to the active session via AgentPort; /stop aborts; /new forks."
+verify = "A free-form message becomes a prompt in the active session; /stop aborts it; /new forks a session."
+covers = ["CC2"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Approval conversation"
+description = "Presents a numbered permission prompt, accepts a keyword or a reaction, answers via AgentPort, and records always."
+verify = "Both reply and reaction answer the permission and unblock the agent; always suppresses the next same-tool prompt."
+covers = ["CC5", "CC6"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "Help and router tests"
+description = "Implements /help and an unknown-command hint; adds unit tests for every command and the approval path against fakes."
+verify = "Tests cover all commands, free-form routing, and both approval inputs; core/ has no adapter imports."
+covers = ["CC1", "CC2", "CC3", "CC4", "CC5", "CC6"]
+after = [3, 4]
+hitl = false
+risk = "low"

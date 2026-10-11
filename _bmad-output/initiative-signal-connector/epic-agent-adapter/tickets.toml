@@ -1,0 +1,69 @@
+# tickets.toml — epic-agent-adapter entries, in build order.
+
+[[entry]]
+id = 1
+type = "story"
+title = "opencode server client and health"
+description = "Starts or attaches to the opencode v2 server and exposes a health-checked client with auth handled."
+verify = "The client reports healthy against a running server and starts one if absent."
+covers = ["AC1"]
+after = []
+hitl = true
+risk = "high"
+notes = ["The operator runs opencode once to authenticate models (operator step)."]
+
+[[entry]]
+id = 2
+type = "story"
+title = "Event stream subscription"
+description = "Subscribes to the server event stream and maps raw events to domain AgentEvent values."
+verify = "Starting a prompt yields mapped events (message, tool, idle, error) in order."
+covers = ["AC1"]
+after = [1]
+hitl = false
+risk = "high"
+unknown = "The v2 event stream endpoint and event shapes must be confirmed against the running server first."
+
+[[entry]]
+id = 3
+type = "story"
+title = "Permission round-trip"
+description = "Classifies a permission as safe/ask, auto-allows safe, forwards ask, and answers with once/always/reject; remembers always per project+tool."
+verify = "A forwarded permission is answered and opencode proceeds; a safe tool is auto-allowed without a prompt."
+covers = ["AC5"]
+after = [2]
+hitl = false
+risk = "high"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Project-to-session mapping and /new fork"
+description = "Maps each project to a persistent session, sends prompts to it, and forks a fresh session on request."
+verify = "Prompts continue the same session; a fork starts a new session and later prompts use it."
+covers = ["AC3", "AC4"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "CLI fallback adapter"
+description = "Implements AgentPort over opencode run --format json for the notification-only case."
+verify = "With the server API disabled, a run emits start/progress/result events and a final summary."
+covers = ["AC2"]
+after = [1]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 6
+type = "story"
+title = "AgentPort wiring and tests"
+description = "Wires the primary and fallback adapters behind AgentPort in the composition root; tests against a fake server."
+verify = "Fake-server tests cover start, events, permissions, and abort; core/ is unchanged between adapters."
+covers = ["AC1", "AC2", "AC3", "AC4", "AC5", "AC6"]
+after = [3, 4, 5]
+hitl = false
+risk = "medium"

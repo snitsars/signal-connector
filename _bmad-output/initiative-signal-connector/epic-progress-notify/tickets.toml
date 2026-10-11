@@ -1,0 +1,67 @@
+# tickets.toml — epic-progress-notify entries, in build order.
+
+[[entry]]
+id = 1
+type = "story"
+title = "Task lifecycle model"
+description = "Models a task from started through running to done/failed, persisted in the store and updated from agent events."
+verify = "Events drive a task through its states; the final state is persisted and queryable."
+covers = ["PN1"]
+after = []
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 2
+type = "story"
+title = "Live status message (edit in place)"
+description = "Posts one status message at task start and edits it as progress changes, using the stored edit handle."
+verify = "During a task the same message updates in place; no duplicate status messages are posted."
+covers = ["PN1", "PN5"]
+after = [1]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 3
+type = "story"
+title = "Milestone messages"
+description = "Emits one message for each meaningful event: files changed, tests run, error."
+verify = "Each milestone posts exactly one concise message; low-value events post none."
+covers = ["PN2", "PN5"]
+after = [2]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 4
+type = "story"
+title = "Final summary and diff attachment"
+description = "On completion, posts a summary and attaches the produced diff."
+verify = "Completion posts a summary and the diff arrives as an attachment that opens on the phone."
+covers = ["PN3"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "Failure reporting"
+description = "Reports task failures and agent errors with actionable context."
+verify = "A failed task posts the error and the step it failed at; no stack dump is sent."
+covers = ["PN4"]
+after = [1]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 6
+type = "story"
+title = "End-to-end notification suite"
+description = "End-to-end test from a fake agent event stream to the expected sequence of Signal sends and edits."
+verify = "The suite asserts the exact message/edit sequence for a success and a failure."
+covers = ["PN1", "PN2", "PN3", "PN4", "PN5"]
+after = [3, 4, 5]
+hitl = false
+risk = "low"
