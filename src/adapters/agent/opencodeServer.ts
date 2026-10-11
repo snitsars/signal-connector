@@ -13,6 +13,7 @@
 import type { AgentPort, StartTaskInput } from "../../core/ports.js";
 import type { AgentEvent, PermissionDecision, Project } from "../../domain/types.js";
 import type { Logger } from "../../logging/logger.js";
+import { combineDiffs, writeDiffFile, type FileDiff } from "./diff.js";
 import { mapOpenCodeEvent } from "./eventMapper.js";
 
 export interface OpenCodeServerOptions {
@@ -173,7 +174,8 @@ export class OpenCodeServerAdapter implements AgentPort {
     }
   }
 
-  private handleEventData(payload: string): void {
+  /** Internal, public for tests: process one SSE data payload. */
+  handleEventData(payload: string): void {
     if (!payload || payload === "[DONE]") return;
     let raw: unknown;
     try {
@@ -191,10 +193,30 @@ export class OpenCodeServerAdapter implements AgentPort {
     const taskId = sessionId ? this.sessionTask.get(sessionId) : undefined;
     if (!taskId) return;
     const event = mapOpenCodeEvent(raw, taskId);
-    if (event?.type === "permission" && event.permission && sessionId) {
+    if (!event) return;
+    if (event.type === "permission" && event.permission && sessionId) {
       this.permissionSession.set(event.permission.id, sessionId);
+      this.emit(event);
+      return;
     }
-    if (event) this.emit(event);
+    if (event.type === "idle" && sessionId) {
+      void this.emitIdleWithDiff(event, sessionId);
+      return;
+    }
+    this.emit(event);
+  }
+
+  private async emitIdleWithDiff(event: AgentEvent, sessionId: string): Promise<void> {
+    try {
+      const diffs = await this.request<FileDiff[]>("GET", `/api/session/${sessionId}/diff`);
+      if (diffs && diffs.length > 0) {
+        this.emit({ ...event, diffPath: writeDiffFile(combineDiffs(diffs)) });
+        return;
+      }
+    } catch (err) {
+      this.opts.logger.debug("opencode diff fetch failed", { error: String(err) });
+    }
+    this.emit(event);
   }
 
   private async pollPermissions(): Promise<void> {

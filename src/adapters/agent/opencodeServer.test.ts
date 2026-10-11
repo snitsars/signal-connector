@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent } from "../../domain/types.js";
 import { nullLogger } from "../../logging/logger.js";
 import { OpenCodeServerAdapter } from "./opencodeServer.js";
 
@@ -63,5 +65,31 @@ describe("OpenCodeServerAdapter", () => {
     const adapter = new OpenCodeServerAdapter({ baseUrl: "http://x", logger: nullLogger() });
     await adapter.startTask({ taskId: "t2", project, prompt: "x" });
     await expect(adapter.answerPermission("per_1", "once")).rejects.toThrow(/unknown permission/);
+  });
+
+  it("attaches the session diff when a session goes idle", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (String(url).endsWith("/api/session")) return jsonResponse({ data: { id: "ses_9" } });
+        if (String(url).endsWith("/diff")) {
+          return jsonResponse({
+            data: [{ file: "a.ts", patch: "@@ -1 +1 @@\n-a\n+b", additions: 1, deletions: 1, status: "modified" }],
+          });
+        }
+        return jsonResponse({ data: {} });
+      }),
+    );
+    const adapter = new OpenCodeServerAdapter({ baseUrl: "http://x", logger: nullLogger() });
+    const events: AgentEvent[] = [];
+    adapter.subscribe((e) => events.push(e));
+
+    await adapter.startTask({ taskId: "t9", project, prompt: "x", sessionId: "ses_9" });
+    adapter.handleEventData(JSON.stringify({ type: "session.idle", sessionID: "ses_9" }));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const idle = events.find((e) => e.type === "idle");
+    expect(idle?.diffPath).toBeDefined();
+    if (idle?.diffPath) fs.unlinkSync(idle.diffPath);
   });
 });

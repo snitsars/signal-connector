@@ -3,10 +3,11 @@
  * Spawns opencode per task in the project directory and maps its JSON lines to
  * AgentEvents. This is the working adapter until the v2 server API is confirmed.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { AgentPort, StartTaskInput } from "../../core/ports.js";
 import type { AgentEvent, PermissionDecision, Project } from "../../domain/types.js";
 import type { Logger } from "../../logging/logger.js";
+import { writeDiffFile } from "./diff.js";
 import { mapOpenCodeEvent } from "./eventMapper.js";
 
 export interface OpenCodeCliOptions {
@@ -50,7 +51,7 @@ export class OpenCodeCliAdapter implements AgentPort {
       windowsHide: true,
     });
     this.running.set(input.taskId, { child, project: input.project });
-    this.pump(input.taskId, child);
+    this.pump(input.taskId, child, input.project);
     return { sessionId };
   }
 
@@ -58,7 +59,7 @@ export class OpenCodeCliAdapter implements AgentPort {
     return { sessionId: `${project.id}-${Date.now()}` };
   }
 
-  private pump(taskId: string, child: ChildProcess): void {
+  private pump(taskId: string, child: ChildProcess, project: Project): void {
     let buffer = "";
     child.stdout?.on("data", (chunk: Buffer) => {
       buffer += chunk.toString("utf8");
@@ -72,11 +73,31 @@ export class OpenCodeCliAdapter implements AgentPort {
     });
     child.on("exit", (code) => {
       this.running.delete(taskId);
-      this.emit({ type: "idle", taskId, at: Date.now(), summary: `exited ${code ?? 0}` });
+      const diffPath = this.gitDiff(project.path);
+      this.emit({
+        type: "idle",
+        taskId,
+        at: Date.now(),
+        summary: `exited ${code ?? 0}`,
+        ...(diffPath ? { diffPath } : {}),
+      });
     });
     child.on("error", (err) => {
       this.emit({ type: "error", taskId, at: Date.now(), text: String(err) });
     });
+  }
+
+  private gitDiff(projectPath: string): string | undefined {
+    try {
+      const result = spawnSync("git", ["-C", projectPath, "diff", "HEAD"], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      const patch = (result.stdout || "").trim();
+      return patch ? writeDiffFile(patch) : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private emitLine(taskId: string, line: string): void {

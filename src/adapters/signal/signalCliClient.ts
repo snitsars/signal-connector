@@ -9,6 +9,7 @@
 import type { SignalPort } from "../../core/ports.js";
 import type { IncomingMessage, OutgoingMessage, Reaction } from "../../domain/types.js";
 import type { Logger } from "../../logging/logger.js";
+import { RateLimiter } from "./rateLimiter.js";
 
 interface RpcResponse<T> {
   jsonrpc: "2.0";
@@ -36,11 +37,14 @@ export interface SignalCliOptions {
   /** Restrict to this channel id (own number for note-to-self, or a group id). */
   channelId: string;
   pollIntervalMs?: number;
+  minIntervalMs?: number;
+  maxPerMinute?: number;
   logger: Logger;
 }
 
 export class SignalCliClient implements SignalPort {
   private readonly opts: Required<Omit<SignalCliOptions, "logger">> & { logger: Logger };
+  private readonly limiter: RateLimiter;
   private messageHandlers: ((m: IncomingMessage) => void)[] = [];
   private reactionHandlers: ((r: Reaction) => void)[] = [];
   private timer: NodeJS.Timeout | undefined;
@@ -50,8 +54,14 @@ export class SignalCliClient implements SignalPort {
   constructor(options: SignalCliOptions) {
     this.opts = {
       pollIntervalMs: 2000,
+      minIntervalMs: 1500,
+      maxPerMinute: 20,
       ...options,
     } as Required<Omit<SignalCliOptions, "logger">> & { logger: Logger };
+    this.limiter = new RateLimiter({
+      minIntervalMs: this.opts.minIntervalMs,
+      maxPerMinute: this.opts.maxPerMinute,
+    });
   }
 
   private async rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
@@ -131,6 +141,7 @@ export class SignalCliClient implements SignalPort {
   }
 
   async send(channelId: string, text: string): Promise<OutgoingMessage> {
+    await this.limiter.acquire();
     const result = await this.rpc<{ timestamp?: number }>("send", {
       account: this.opts.account,
       recipient: this.recipientFor(channelId),
@@ -140,6 +151,7 @@ export class SignalCliClient implements SignalPort {
   }
 
   async edit(channelId: string, messageId: string, text: string): Promise<void> {
+    await this.limiter.acquire();
     await this.rpc("send", {
       account: this.opts.account,
       recipient: this.recipientFor(channelId),
@@ -149,6 +161,7 @@ export class SignalCliClient implements SignalPort {
   }
 
   async attach(channelId: string, filePath: string, caption?: string): Promise<OutgoingMessage> {
+    await this.limiter.acquire();
     const result = await this.rpc<{ timestamp?: number }>("send", {
       account: this.opts.account,
       recipient: this.recipientFor(channelId),
