@@ -15,6 +15,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "tsx src/index.ts",
     "start": "node dist/index.js",
+    "link": "tsx src/cli/link.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },

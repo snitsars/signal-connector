@@ -4,6 +4,7 @@
  */
 import path from "node:path";
 import { OpenCodeCliAdapter } from "./adapters/agent/opencodeCli.js";
+import { SignalCliDaemon } from "./adapters/signal/daemon.js";
 import { SignalCliClient } from "./adapters/signal/signalCliClient.js";
 import { dataDir, loadConfig } from "./config/config.js";
 import { defaultSecretStore } from "./config/secrets.js";
@@ -34,6 +35,17 @@ async function main(): Promise<void> {
     logger,
   });
 
+  const daemon = config.signal.manageDaemon
+    ? new SignalCliDaemon({
+        cliPath: config.signal.cliPath,
+        host: config.signal.daemonHost,
+        port: config.signal.daemonPort,
+        ...(config.signal.account ? { account: config.signal.account } : {}),
+        logger,
+      })
+    : undefined;
+  if (daemon) await daemon.start();
+
   const agent = new OpenCodeCliAdapter({
     opencodePath: config.agent.opencodePath,
     logger,
@@ -49,6 +61,7 @@ async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     logger.info("shutting down");
     await app.stop();
+    await daemon?.stop();
     store.close();
     process.exit(0);
   };

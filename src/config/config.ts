@@ -26,8 +26,14 @@ export const ConfigSchema = z.object({
       account: z.string().optional(),
       daemonHost: z.string().default("127.0.0.1"),
       daemonPort: z.number().int().default(8080),
+      manageDaemon: z.boolean().default(false),
     })
-    .default({ cliPath: "signal-cli", daemonHost: "127.0.0.1", daemonPort: 8080 }),
+    .default({
+      cliPath: "signal-cli",
+      daemonHost: "127.0.0.1",
+      daemonPort: 8080,
+      manageDaemon: false,
+    }),
   agent: z
     .object({
       kind: z.enum(["opencode-server", "opencode-cli"]).default("opencode-server"),
