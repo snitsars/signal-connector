@@ -38,33 +38,43 @@ src/
   cli/        link, dry-run
 ```
 
-## Host setup (live Signal)
+## Host setup (Windows, scripted)
 
-Prerequisites:
+Prerequisites: Windows 10+, Node ≥ 20. The scripts install the rest.
 
-- **Java 25** and **signal-cli** on PATH (or set `signal.cliPath`).
-- **opencode v2** installed and authenticated (`opencode auth login`).
+```powershell
+# 1. Java 25 + signal-cli + config.toml, with next steps printed
+pwsh scripts/setup.ps1                       # add -ProjectName myapp -ProjectPath C:\Sources\myapp
 
-Steps:
+# 2. Start the opencode v2 server (background)
+pwsh scripts/start-opencode.ps1
 
-1. `npm install`
-2. `npm run link` — prints a `sgnl://linkdevice?...` URI; scan it in Signal →
-   Settings → Linked Devices → Link New Device. The account is printed when linked.
-3. Edit `%APPDATA%\SignalConnector\config.toml`:
-   ```toml
-   [signal]
-   account = "+1..."        # the linked number
-   manageDaemon = true      # let the service start signal-cli itself
-   [channel]
-   kind = "note-to-self"
-   [agent]
-   kind = "opencode-server"
-   serverUrl = "http://127.0.0.1:4096"
-   [[projects]]
-   name = "myproject"
-   path = "C:\\Sources\\myproject"
-   ```
-4. `npm run dev`
+# 3. Link your Signal account (scan the QR shown in the terminal)
+pwsh scripts/link-device.ps1                 # = npm run link
+
+# 4. Put the printed number into signal.account, then run
+pwsh scripts/run.ps1                         # = npm run dev
+```
+
+Scripts:
+
+| Script | Does |
+|---|---|
+| `scripts/setup.ps1` | ensure Java 25, install signal-cli, write `%APPDATA%\SignalConnector\config.toml`, print next steps |
+| `scripts/ensure-java.ps1` | verify/install Microsoft OpenJDK 25 via winget |
+| `scripts/install-signal-cli.ps1` | download latest signal-cli into `%LOCALAPPDATA%\SignalConnector\signal-cli`, print `signal-cli.bat` |
+| `scripts/start-opencode.ps1` | start `opencode serve` on `127.0.0.1:4096` if not already up |
+| `scripts/link-device.ps1` | run `npm run link` (device QR) |
+| `scripts/run.ps1` | run the daemon (`npm run dev`) |
+
+A reference config lives at `scripts/config.example.toml`.
+
+### Manual equivalent
+
+1. Install Java 25 and signal-cli; set `signal.cliPath` to `signal-cli.bat`.
+2. `opencode serve` (or set `agent.serverUrl` to your server).
+3. `npm run link` — scan the QR; set `signal.account`.
+4. `npm run dev`.
 
 Then, in Signal Note-to-Self:
 

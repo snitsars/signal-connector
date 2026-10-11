@@ -7,6 +7,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { AgentPort, StartTaskInput } from "../../core/ports.js";
 import type { AgentEvent, PermissionDecision, Project } from "../../domain/types.js";
 import type { Logger } from "../../logging/logger.js";
+import { resolveCommand } from "../spawnCommand.js";
 import { writeDiffFile } from "./diff.js";
 import { mapOpenCodeEvent } from "./eventMapper.js";
 
@@ -37,7 +38,11 @@ export class OpenCodeCliAdapter implements AgentPort {
 
   async health(): Promise<boolean> {
     return new Promise((resolve) => {
-      const child = spawn(this.opts.opencodePath, ["--version"], { windowsHide: true });
+      const resolved = resolveCommand(this.opts.opencodePath, ["--version"]);
+      const child = spawn(resolved.command, resolved.args, {
+        shell: resolved.shell,
+        windowsHide: true,
+      });
       child.on("error", () => resolve(false));
       child.on("exit", (code) => resolve(code === 0));
     });
@@ -46,7 +51,9 @@ export class OpenCodeCliAdapter implements AgentPort {
   async startTask(input: StartTaskInput): Promise<{ sessionId: string }> {
     const sessionId = input.sessionId ?? `${input.project.id}-${Date.now()}`;
     const args = ["run", "--format", "json", "--session", sessionId, "--", input.prompt];
-    const child = spawn(this.opts.opencodePath, args, {
+    const resolved = resolveCommand(this.opts.opencodePath, args);
+    const child = spawn(resolved.command, resolved.args, {
+      shell: resolved.shell,
       cwd: input.project.path,
       windowsHide: true,
     });

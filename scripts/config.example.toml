@@ -1,0 +1,27 @@
+# SignalConnector config.toml — created by scripts/setup.ps1.
+# Copy to %APPDATA%\SignalConnector\config.toml and edit.
+# Paths use TOML literal strings (single quotes) so backslashes are not escapes.
+
+[channel]
+kind = "note-to-self"        # "note-to-self" (own number) or "group"
+# id = "+1..."               # required only for "group": the group id
+
+[signal]
+cliPath = 'C:\Users\you\AppData\Local\SignalConnector\signal-cli\bin\signal-cli.bat'
+account = ""                 # the linked number, e.g. "+1..."
+manageDaemon = true          # let the service start signal-cli itself
+daemonHost = "127.0.0.1"
+daemonPort = 8080
+
+[agent]
+kind = "opencode-server"     # "opencode-server" or "opencode-cli"
+serverUrl = "http://127.0.0.1:4096"
+opencodePath = "opencode"
+
+[outbound]
+minIntervalMs = 1500         # minimum spacing between sends
+maxPerMinute = 20            # rolling cap
+
+[[projects]]
+name = "myproject"
+path = 'C:\Sources\myproject'

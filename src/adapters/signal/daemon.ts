@@ -5,6 +5,7 @@
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import type { Logger } from "../../logging/logger.js";
+import { resolveCommand } from "../spawnCommand.js";
 
 export interface DaemonOptions {
   cliPath: string;
@@ -64,7 +65,9 @@ export class SignalCliDaemon {
     }
     const args = buildDaemonArgs(this.opts);
     this.opts.logger.info("starting signal-cli daemon", { args: args.join(" ") });
-    this.child = spawn(this.opts.cliPath, args, {
+    const resolved = resolveCommand(this.opts.cliPath, args);
+    this.child = spawn(resolved.command, resolved.args, {
+      shell: resolved.shell,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
