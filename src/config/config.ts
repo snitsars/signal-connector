@@ -37,10 +37,10 @@ export const ConfigSchema = z.object({
   agent: z
     .object({
       kind: z.enum(["opencode-server", "opencode-cli"]).default("opencode-server"),
-      serverUrl: z.string().optional(),
+      serverUrl: z.string().default("http://127.0.0.1:4096"),
       opencodePath: z.string().default("opencode"),
     })
-    .default({ kind: "opencode-server", opencodePath: "opencode" }),
+    .default({ kind: "opencode-server", serverUrl: "http://127.0.0.1:4096", opencodePath: "opencode" }),
   projects: z
     .array(z.object({ name: z.string(), path: z.string() }))
     .default([]),

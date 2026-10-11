@@ -1,19 +1,29 @@
 /**
  * Chooses the AgentPort implementation from config (spine AD-5).
  *
- * Both configured kinds currently use the CLI adapter, which drives the
- * running opencode service via `opencode run --format json`. The v2 server API
- * adapter (live event stream + permission round-trip) is tickets 3.2/3.3 and
- * will slot in here without touching the core.
+ * Prefers the opencode v2 server API (live events + permission round-trip)
+ * when the configured server is reachable; otherwise falls back to the CLI
+ * adapter so notifications still work.
  */
 import type { Config } from "../../config/config.js";
 import type { AgentPort } from "../../core/ports.js";
 import type { Logger } from "../../logging/logger.js";
 import { OpenCodeCliAdapter } from "./opencodeCli.js";
+import { OpenCodeServerAdapter } from "./opencodeServer.js";
 
-export function createAgentAdapter(config: Config, logger: Logger): AgentPort {
+export async function createAgentAdapter(config: Config, logger: Logger): Promise<AgentPort> {
   if (config.agent.kind === "opencode-server") {
-    logger.info("agent: opencode server API pending; using CLI adapter (ticket 3.2)");
+    const server = new OpenCodeServerAdapter({
+      baseUrl: config.agent.serverUrl,
+      logger,
+    });
+    if (await server.health()) {
+      logger.info("agent: using opencode server API", { baseUrl: config.agent.serverUrl });
+      return server;
+    }
+    logger.warn("agent: opencode server not reachable; falling back to CLI adapter", {
+      baseUrl: config.agent.serverUrl,
+    });
   }
   return new OpenCodeCliAdapter({ opencodePath: config.agent.opencodePath, logger });
 }

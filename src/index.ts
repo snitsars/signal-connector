@@ -46,7 +46,7 @@ async function main(): Promise<void> {
     : undefined;
   if (daemon) await daemon.start();
 
-  const agent = createAgentAdapter(config, logger);
+  const agent = await createAgentAdapter(config, logger);
 
   // Secrets are resolved lazily by adapters that need them; keep the store ready.
   void secrets;
