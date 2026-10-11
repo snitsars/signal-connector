@@ -3,7 +3,7 @@
  * This is the only place that knows which adapter implementations exist.
  */
 import path from "node:path";
-import { OpenCodeCliAdapter } from "./adapters/agent/opencodeCli.js";
+import { createAgentAdapter } from "./adapters/agent/factory.js";
 import { SignalCliDaemon } from "./adapters/signal/daemon.js";
 import { SignalCliClient } from "./adapters/signal/signalCliClient.js";
 import { dataDir, loadConfig } from "./config/config.js";
@@ -46,10 +46,7 @@ async function main(): Promise<void> {
     : undefined;
   if (daemon) await daemon.start();
 
-  const agent = new OpenCodeCliAdapter({
-    opencodePath: config.agent.opencodePath,
-    logger,
-  });
+  const agent = createAgentAdapter(config, logger);
 
   // Secrets are resolved lazily by adapters that need them; keep the store ready.
   void secrets;

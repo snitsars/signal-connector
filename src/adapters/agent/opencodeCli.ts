@@ -7,6 +7,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import type { AgentPort, StartTaskInput } from "../../core/ports.js";
 import type { AgentEvent, PermissionDecision, Project } from "../../domain/types.js";
 import type { Logger } from "../../logging/logger.js";
+import { mapOpenCodeEvent } from "./eventMapper.js";
 
 export interface OpenCodeCliOptions {
   opencodePath: string;
@@ -80,20 +81,8 @@ export class OpenCodeCliAdapter implements AgentPort {
 
   private emitLine(taskId: string, line: string): void {
     try {
-      const parsed = JSON.parse(line) as Record<string, unknown>;
-      const type = typeof parsed.type === "string" ? parsed.type : "status";
-      const text =
-        typeof parsed.text === "string"
-          ? parsed.text
-          : typeof parsed.message === "string"
-            ? parsed.message
-            : undefined;
-      this.emit({
-        type: type === "error" ? "error" : "status",
-        taskId,
-        at: Date.now(),
-        ...(text ? { text } : {}),
-      });
+      const event = mapOpenCodeEvent(JSON.parse(line), taskId);
+      if (event) this.emit(event);
     } catch {
       this.emit({ type: "status", taskId, at: Date.now(), text: line.slice(0, 200) });
     }
