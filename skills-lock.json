@@ -198,6 +198,12 @@
       "sourceType": "github",
       "skillPath": "skills/bmod-toolsmith/SKILL.md",
       "computedHash": "5989ce26176a3027716acccab91f35d7163488e78ee954d3827a565b6039c868"
+    },
+    "grill-me": {
+      "source": "mattpocock/skills",
+      "sourceType": "github",
+      "skillPath": "skills/productivity/grill-me/SKILL.md",
+      "computedHash": "9cdbb4b8f7a3aeaef82e6230c9e823500d4a8a1214c726cf342cf9829d34fc7d"
     }
   }
 }
