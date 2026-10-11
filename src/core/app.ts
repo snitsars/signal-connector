@@ -47,6 +47,8 @@ export class CoreApp {
   private readonly logger: Logger;
   private readonly now: () => number;
   private controlChannel = "self";
+  /** Serializes handler dispatch so events are processed in arrival order. */
+  private chain: Promise<void> = Promise.resolve();
 
   constructor(deps: CoreDeps) {
     this.store = deps.store;
@@ -63,9 +65,9 @@ export class CoreApp {
     }
     this.controlChannel = this.config.channel.id ?? this.config.signal.account ?? "self";
 
-    this.signal.onMessage((m) => void this.handleMessage(m));
-    this.signal.onReaction((r) => void this.handleReaction(r));
-    this.agent.subscribe((e) => void this.handleAgentEvent(e));
+    this.signal.onMessage((m) => this.enqueue(() => this.handleMessage(m)));
+    this.signal.onReaction((r) => this.enqueue(() => this.handleReaction(r)));
+    this.agent.subscribe((e) => this.enqueue(() => this.handleAgentEvent(e)));
 
     await this.signal.start();
     await this.agent.start();
@@ -366,5 +368,12 @@ export class CoreApp {
     const list = this.pending();
     if (!list.some((p) => p.messageId === reaction.targetId)) return;
     await this.resolveApproval(decision, reaction.targetId);
+  }
+
+  /** Queue a handler so dispatch preserves arrival order. */
+  private enqueue(task: () => Promise<void>): void {
+    this.chain = this.chain.then(task).catch((err: unknown) => {
+      this.logger.error("handler error", { error: String(err) });
+    });
   }
 }
