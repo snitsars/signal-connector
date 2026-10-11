@@ -37,7 +37,7 @@ async function main(): Promise<void> {
 
   const daemon = config.signal.manageDaemon
     ? new SignalCliDaemon({
-        cliPath: config.signal.cliPath,
+        command: config.signal.command ?? [config.signal.cliPath],
         host: config.signal.daemonHost,
         port: config.signal.daemonPort,
         ...(config.signal.account ? { account: config.signal.account } : {}),

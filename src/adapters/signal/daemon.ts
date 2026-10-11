@@ -8,7 +8,14 @@ import type { Logger } from "../../logging/logger.js";
 import { resolveCommand } from "../spawnCommand.js";
 
 export interface DaemonOptions {
-  cliPath: string;
+  /**
+   * Base argv to invoke signal-cli. Either `["signal-cli"]`, or a java
+   * wildcard-classpath form:
+   * ["java", "--enable-native-access=ALL-UNNAMED", "-cp", "<dir>\\lib\\*", "org.asamk.signal.Main"].
+   * The latter avoids the Windows command-line length limit that breaks
+   * signal-cli.bat when the install path is long.
+   */
+  command: string[];
   host: string;
   port: number;
   account?: string;
@@ -19,12 +26,15 @@ export interface DaemonOptions {
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/** Pure: the argv passed to signal-cli for daemon mode. */
-export function buildDaemonArgs(opts: { host: string; port: number; account?: string }): string[] {
-  const args: string[] = [];
-  if (opts.account) args.push("-a", opts.account);
-  args.push("daemon", "--http", `${opts.host}:${opts.port}`);
-  return args;
+/** Pure: the full argv passed to signal-cli for daemon mode. */
+export function buildDaemonArgv(
+  command: string[],
+  opts: { host: string; port: number; account?: string },
+): string[] {
+  const argv = [...command];
+  if (opts.account) argv.push("-a", opts.account);
+  argv.push("daemon", "--http", `${opts.host}:${opts.port}`);
+  return argv;
 }
 
 export function rpcEndpoint(host: string, port: number): string {
@@ -63,9 +73,11 @@ export class SignalCliDaemon {
       this.opts.logger.info("signal-cli daemon already reachable");
       return;
     }
-    const args = buildDaemonArgs(this.opts);
-    this.opts.logger.info("starting signal-cli daemon", { args: args.join(" ") });
-    const resolved = resolveCommand(this.opts.cliPath, args);
+    const argv = buildDaemonArgv(this.opts.command, this.opts);
+    const bin = argv[0];
+    if (!bin) throw new Error("signal.command is empty");
+    this.opts.logger.info("starting signal-cli daemon", { command: argv.join(" ") });
+    const resolved = resolveCommand(bin, argv.slice(1));
     this.child = spawn(resolved.command, resolved.args, {
       shell: resolved.shell,
       windowsHide: true,

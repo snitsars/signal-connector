@@ -29,13 +29,14 @@ Write-Host "Fetching latest signal-cli release..."
 $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/AsamK/signal-cli/releases/latest' `
     -Headers @{ 'User-Agent' = 'SignalConnector' }
 
-$asset = $release.assets | Where-Object { $_.name -like '*.tar.gz' } | Select-Object -First 1
-if (-not $asset) { throw "No .tar.gz asset found in the latest signal-cli release." }
+$asset = $release.assets | Where-Object { $_.name -match '^signal-cli-[\d.]+\.tar\.gz$' } | Select-Object -First 1
+if (-not $asset) { throw "No signal-cli-<version>.tar.gz asset found in the latest release." }
 
 $tmp = Join-Path $env:TEMP $asset.name
 Write-Host "Downloading $($asset.name)..."
 Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tmp
 
+if (Test-Path $Destination) { Remove-Item -Recurse -Force $Destination }
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 Write-Host "Extracting to $Destination..."
 tar -xzf $tmp -C $Destination

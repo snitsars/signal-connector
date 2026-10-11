@@ -7,7 +7,10 @@ kind = "note-to-self"        # "note-to-self" (own number) or "group"
 # id = "+1..."               # required only for "group": the group id
 
 [signal]
-cliPath = 'C:\Users\you\AppData\Local\SignalConnector\signal-cli\bin\signal-cli.bat'
+cliPath = 'C:\Users\you\AppData\Local\SignalConnector\signal-cli\signal-cli-0.14.9\bin\signal-cli.bat'
+# Preferred: invoke the jar directly with a wildcard classpath (signal-cli.bat
+# overflows the Windows command-line limit on long install paths).
+command = ['C:\Program Files\Microsoft\jdk-25.0.4.101-hotspot\bin\java.exe', '--enable-native-access=ALL-UNNAMED', '-cp', 'C:\Users\you\AppData\Local\SignalConnector\signal-cli\signal-cli-0.14.9\lib\*', 'org.asamk.signal.Main']
 account = ""                 # the linked number, e.g. "+1..."
 manageDaemon = true          # let the service start signal-cli itself
 daemonHost = "127.0.0.1"

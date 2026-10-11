@@ -23,6 +23,8 @@ export const ConfigSchema = z.object({
   signal: z
     .object({
       cliPath: z.string().default("signal-cli"),
+      /** Full argv for signal-cli (preferred over cliPath when set). */
+      command: z.array(z.string()).optional(),
       account: z.string().optional(),
       daemonHost: z.string().default("127.0.0.1"),
       daemonPort: z.number().int().default(8080),

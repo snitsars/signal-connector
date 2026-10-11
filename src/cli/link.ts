@@ -13,7 +13,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const logger = createLogger({ level: "info" });
   const daemon = new SignalCliDaemon({
-    cliPath: config.signal.cliPath,
+    command: config.signal.command ?? [config.signal.cliPath],
     host: config.signal.daemonHost,
     port: config.signal.daemonPort,
     ...(config.signal.account ? { account: config.signal.account } : {}),
