@@ -21,7 +21,8 @@ Write-Host "starting service..."
 Start-Process -FilePath "pwsh" -ArgumentList '-NoProfile', '-File', (Join-Path $PSScriptRoot 'run.ps1') -WindowStyle Hidden
 Start-Sleep -Seconds 6
 
-$listening = Get-NetTCPConnection -LocalPort $BridgePort -State Listen -ErrorAction SilentlyContinue
+$listening = $null
+try { $listening = Get-NetTCPConnection -LocalPort $BridgePort -State Listen -ErrorAction Stop } catch { }
 if ($listening) {
     Write-Host "service restarted (bridge $BridgePort)" -ForegroundColor Green
 } else {

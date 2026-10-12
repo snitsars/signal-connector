@@ -35,7 +35,10 @@ Get-CimInstance Win32_Process -Filter "Name='java.exe'" |
     }
 
 # 3. Fallback: whatever holds the bridge port.
-$bridgePid = (Get-NetTCPConnection -LocalPort $BridgePort -State Listen | Select-Object -First 1).OwningProcess
+$bridgePid = $null
+try {
+    $bridgePid = (Get-NetTCPConnection -LocalPort $BridgePort -State Listen -ErrorAction Stop | Select-Object -First 1).OwningProcess
+} catch { }
 if ($bridgePid) {
     Stop-Process -Id $bridgePid -Force
     Write-Host "stopped bridge listener (pid $bridgePid)" -ForegroundColor Yellow
@@ -44,7 +47,10 @@ if ($bridgePid) {
 
 # 4. Optional: opencode server on :4096.
 if ($All) {
-    $ocPid = (Get-NetTCPConnection -LocalPort 4096 -State Listen | Select-Object -First 1).OwningProcess
+    $ocPid = $null
+    try {
+        $ocPid = (Get-NetTCPConnection -LocalPort 4096 -State Listen -ErrorAction Stop | Select-Object -First 1).OwningProcess
+    } catch { }
     if ($ocPid) {
         Stop-Process -Id $ocPid -Force
         Write-Host "stopped opencode serve (pid $ocPid)" -ForegroundColor Yellow

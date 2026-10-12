@@ -60,7 +60,8 @@ if (Test-Path $cfg) {
 }
 
 # 3. Start the service (unless it is already listening on the bridge port).
-$listening = Get-NetTCPConnection -LocalPort $BridgePort -State Listen -ErrorAction SilentlyContinue
+$listening = $null
+try { $listening = Get-NetTCPConnection -LocalPort $BridgePort -State Listen -ErrorAction Stop } catch { }
 if ($listening) {
     Write-Host "service already running (bridge $BridgePort)" -ForegroundColor Green
 } else {
