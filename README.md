@@ -50,6 +50,9 @@ The service owns Signal, the command router, and state. The **agent side** has t
 
 ### Plugin mode
 
+The plugin targets **opencode v2** (`export default { id, setup }`; `ctx` is a server
+client with `ctx.session.*`, `ctx.permission.*`, `ctx.event.subscribe`).
+
 1. Set `agent.kind = "plugin"` in `config.toml` (bridge defaults to `127.0.0.1:8790`).
 2. Run the service (`pwsh scripts/run.ps1`).
 3. Open a project in opencode. The plugin at `.opencode/plugins/signal-connector.ts` connects,
