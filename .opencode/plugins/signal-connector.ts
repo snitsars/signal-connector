@@ -183,4 +183,10 @@ async function setup(ctx: any): Promise<() => void> {
   };
 }
 
-export default { id: "signal-connector", setup };
+export default {
+  id: "signal-connector",
+  setup,
+  // Some opencode builds use a v1-style loader that requires a `server`
+  // function; the v2 loader reads id/setup and ignores this. No-op there.
+  server: () => ({}),
+};
