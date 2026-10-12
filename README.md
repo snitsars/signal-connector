@@ -109,6 +109,9 @@ Scripts:
 | `scripts/start-opencode.ps1` | start `opencode serve` on `127.0.0.1:4096` if not already up |
 | `scripts/link-device.ps1` | run `npm run link` (device QR) |
 | `scripts/run.ps1` | run the daemon (`npm run dev`) |
+| `scripts/start-all.ps1` | plugin mode: install plugin globally, set `agent.kind=plugin`, start service, open projects |
+| `scripts/stop.ps1` | stop the service + signal-cli daemon (`-All` also stops opencode serve) |
+| `scripts/restart.ps1` | stop then start the service |
 
 A reference config lives at `scripts/config.example.toml`.
 
