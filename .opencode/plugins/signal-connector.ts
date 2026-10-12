@@ -33,7 +33,8 @@ function basename(dir: string): string {
 
 async function setup(ctx: any): Promise<() => void> {
   const directory: string = ctx?.location?.directory ?? process.cwd();
-  const name: string = ctx?.location?.project?.canonical ?? basename(directory);
+  const canonical: string = ctx?.location?.project?.canonical ?? directory;
+  const name: string = basename(canonical);
 
   const taskBySession = new Map<string, string>();
   const sessionByTask = new Map<string, string>();

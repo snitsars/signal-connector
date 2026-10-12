@@ -42,18 +42,31 @@ New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
 Copy-Item $pluginSrc (Join-Path $pluginDir 'signal-connector.ts') -Force
 Write-Host "plugin installed -> $pluginDir\signal-connector.ts" -ForegroundColor Green
 
-# 2. Set agent.kind = "plugin" in the service config.
+# 2. Set agent.kind = "plugin" in the service config (section-scoped, idempotent).
 $cfg = Join-Path $env:APPDATA 'SignalConnector\config.toml'
 if (Test-Path $cfg) {
-    $text = Get-Content $cfg -Raw
-    if ($text -match '(?m)^\s*kind\s*=\s*"opencode-(server|cli)"') {
-        $text = $text -replace '(?m)^\s*kind\s*=\s*"opencode-(server|cli)"', 'kind = "plugin"'
-    } elseif ($text -match '(?m)^\[agent\]') {
-        $text = $text -replace '(?m)^(\[agent\]\s*\r?\n)', "`$1kind = `"plugin`"`n"
-    } else {
-        $text = $text.TrimEnd() + "`n`n[agent]`nkind = `"plugin`"`n"
+    $out = New-Object System.Collections.Generic.List[string]
+    $inAgent = $false
+    $agentSeen = $false
+    $kindWritten = $false
+    foreach ($line in (Get-Content -Path $cfg)) {
+        if ($line -match '^\s*\[(.+?)\]') {
+            if ($inAgent -and -not $kindWritten) { $out.Add('kind = "plugin"') }
+            $inAgent = ($Matches[1] -eq 'agent')
+            if ($inAgent) { $agentSeen = $true }
+            $kindWritten = $false
+            $out.Add($line)
+            continue
+        }
+        if ($inAgent -and $line -match '^\s*kind\s*=') {
+            if (-not $kindWritten) { $out.Add('kind = "plugin"'); $kindWritten = $true }
+            continue
+        }
+        $out.Add($line)
     }
-    Set-Content -Path $cfg -Value $text -Encoding utf8
+    if ($inAgent -and -not $kindWritten) { $out.Add('kind = "plugin"') }
+    if (-not $agentSeen) { $out.Add(''); $out.Add('[agent]'); $out.Add('kind = "plugin"') }
+    Set-Content -Path $cfg -Value $out -Encoding utf8
     Write-Host "config: agent.kind = plugin  ($cfg)" -ForegroundColor Green
 } else {
     Write-Host "No config found — run scripts/setup.ps1 first." -ForegroundColor Yellow
