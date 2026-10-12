@@ -33,7 +33,7 @@ export function buildDaemonArgv(
 ): string[] {
   const argv = [...command];
   if (opts.account) argv.push("-a", opts.account);
-  argv.push("daemon", "--http", `${opts.host}:${opts.port}`);
+  argv.push("daemon", "--http", `${opts.host}:${opts.port}`, "--receive-mode", "manual");
   return argv;
 }
 

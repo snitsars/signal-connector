@@ -16,7 +16,7 @@ async function main(): Promise<void> {
   const dir = dataDir();
   const config = loadConfig(dir);
   const logger = createLogger({
-    level: "info",
+    level: (process.env.LOG_LEVEL as "debug" | "info" | "warn" | "error") ?? "info",
     file: path.join(dir, "logs", "signal-connector.log"),
   });
 

@@ -6,7 +6,16 @@ describe("signal-cli daemon helpers", () => {
   it("appends daemon flags after a base command with an account", () => {
     expect(
       buildDaemonArgv(["signal-cli"], { host: "127.0.0.1", port: 8080, account: "+1000" }),
-    ).toEqual(["signal-cli", "-a", "+1000", "daemon", "--http", "127.0.0.1:8080"]);
+    ).toEqual([
+      "signal-cli",
+      "-a",
+      "+1000",
+      "daemon",
+      "--http",
+      "127.0.0.1:8080",
+      "--receive-mode",
+      "manual",
+    ]);
   });
 
   it("keeps a java wildcard-classpath command intact", () => {
@@ -15,8 +24,14 @@ describe("signal-cli daemon helpers", () => {
       { host: "127.0.0.1", port: 8080 },
     );
     expect(argv[0]).toBe("java");
-    expect(argv[argv.length - 1]).toBe("127.0.0.1:8080");
-    expect(argv.slice(-3)).toEqual(["daemon", "--http", "127.0.0.1:8080"]);
+    expect(argv[argv.length - 1]).toBe("manual");
+    expect(argv.slice(-5)).toEqual([
+      "daemon",
+      "--http",
+      "127.0.0.1:8080",
+      "--receive-mode",
+      "manual",
+    ]);
   });
 
   it("computes the JSON-RPC endpoint", () => {

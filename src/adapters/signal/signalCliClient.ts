@@ -18,7 +18,16 @@ interface RpcResponse<T> {
   error?: { code: number; message: string };
 }
 
+interface SentMessage {
+  destination?: string;
+  destinationNumber?: string;
+  message?: string;
+  timestamp?: number;
+  reaction?: { emoji?: string; targetSentTimestamp?: number };
+}
+
 interface Envelope {
+  envelope?: Envelope;
   sourceNumber?: string;
   source?: string;
   timestamp?: number;
@@ -28,6 +37,10 @@ interface Envelope {
     quote?: { id?: number };
     reaction?: { emoji?: string; targetSentTimestamp?: number };
     attachments?: { filename?: string }[];
+  };
+  /** Note-to-Self messages from the linked phone arrive here. */
+  syncMessage?: {
+    sentMessage?: SentMessage;
   };
 }
 
@@ -84,7 +97,6 @@ export class SignalCliClient implements SignalPort {
       if (!this.running) return;
       try {
         const envelopes = await this.rpc<Envelope[]>("receive", {
-          account: this.opts.account,
           timeout: 1,
         });
         for (const env of envelopes ?? []) this.dispatch(env);
@@ -104,46 +116,79 @@ export class SignalCliClient implements SignalPort {
     if (this.timer) clearTimeout(this.timer);
   }
 
-  private dispatch(env: Envelope): void {
-    const data = env.dataMessage;
-    if (!data) return;
-    const channelId = data.groupInfo?.groupId ?? env.sourceNumber ?? env.source ?? "";
-    const sender = env.sourceNumber ?? env.source ?? "";
-    const at = env.timestamp ?? Date.now();
+  private dispatch(raw: Envelope): void {
+    const env = raw.envelope ?? raw;
+    this.opts.logger.debug("signal envelope", { envelope: env });
 
-    if (data.reaction) {
-      const reaction: Reaction = {
+    const data = env.dataMessage;
+    if (data) {
+      const channelId = data.groupInfo?.groupId ?? env.sourceNumber ?? env.source ?? "";
+      const sender = env.sourceNumber ?? env.source ?? "";
+      const at = env.timestamp ?? Date.now();
+      if (data.reaction) {
+        this.emitReaction({
+          channelId,
+          sender,
+          emoji: data.reaction.emoji ?? "",
+          targetId: String(data.reaction.targetSentTimestamp ?? ""),
+          at,
+        });
+        return;
+      }
+      const message: IncomingMessage = {
+        id: String(at),
         channelId,
         sender,
-        emoji: data.reaction.emoji ?? "",
-        targetId: String(data.reaction.targetSentTimestamp ?? ""),
+        text: data.message ?? "",
         at,
+        inControlChannel: this.isControlChannel(channelId),
       };
-      for (const h of this.reactionHandlers) h(reaction);
+      if (data.quote?.id != null) message.quoteId = String(data.quote.id);
+      for (const h of this.messageHandlers) h(message);
       return;
     }
 
-    const message: IncomingMessage = {
-      id: String(at),
-      channelId,
-      sender,
-      text: data.message ?? "",
-      at,
-      inControlChannel: this.isControlChannel(channelId),
-    };
-    if (data.quote?.id != null) message.quoteId = String(data.quote.id);
-    for (const h of this.messageHandlers) h(message);
+    // Note-to-Self messages sent from the linked phone arrive as a sync message.
+    const sent = env.syncMessage?.sentMessage;
+    if (sent) {
+      const destination = sent.destinationNumber ?? sent.destination ?? "";
+      if (destination !== this.opts.account) return;
+      const at = sent.timestamp ?? env.timestamp ?? Date.now();
+      const channelId = this.opts.account;
+      if (sent.reaction) {
+        this.emitReaction({
+          channelId,
+          sender: channelId,
+          emoji: sent.reaction.emoji ?? "",
+          targetId: String(sent.reaction.targetSentTimestamp ?? ""),
+          at,
+        });
+        return;
+      }
+      const message: IncomingMessage = {
+        id: String(at),
+        channelId,
+        sender: channelId,
+        text: sent.message ?? "",
+        at,
+        inControlChannel: this.isControlChannel(channelId),
+      };
+      for (const h of this.messageHandlers) h(message);
+    }
+  }
+
+  private emitReaction(reaction: Reaction): void {
+    for (const h of this.reactionHandlers) h(reaction);
   }
 
   private isControlChannel(channelId: string): boolean {
-    if (this.opts.channelId === "self") return true;
+    if (this.opts.channelId === "self") return channelId === this.opts.account;
     return channelId === this.opts.channelId;
   }
 
   async send(channelId: string, text: string): Promise<OutgoingMessage> {
     await this.limiter.acquire();
     const result = await this.rpc<{ timestamp?: number }>("send", {
-      account: this.opts.account,
       recipient: this.recipientFor(channelId),
       message: text,
     });
@@ -153,7 +198,6 @@ export class SignalCliClient implements SignalPort {
   async edit(channelId: string, messageId: string, text: string): Promise<void> {
     await this.limiter.acquire();
     await this.rpc("send", {
-      account: this.opts.account,
       recipient: this.recipientFor(channelId),
       message: text,
       editTimestamp: Number(messageId),
@@ -163,7 +207,6 @@ export class SignalCliClient implements SignalPort {
   async attach(channelId: string, filePath: string, caption?: string): Promise<OutgoingMessage> {
     await this.limiter.acquire();
     const result = await this.rpc<{ timestamp?: number }>("send", {
-      account: this.opts.account,
       recipient: this.recipientFor(channelId),
       message: caption ?? "",
       attachment: [filePath],
