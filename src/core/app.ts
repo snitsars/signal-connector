@@ -318,7 +318,12 @@ export class CoreApp {
     return sent;
   }
 
-  /** Called when a project's plugin connects: greet and tag the message. */
+  /** Called when a project's plugin connects: register it, then greet and tag the message. */
+  async onProjectConnected(project: Project): Promise<void> {
+    this.store.upsertProject(project);
+    await this.notifyProjectConnected(project.id);
+  }
+
   async notifyProjectConnected(projectId: string): Promise<void> {
     const project = this.store.getProject(projectId);
     const name = project?.name ?? projectId;
