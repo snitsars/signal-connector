@@ -10,6 +10,7 @@ import type { Store } from "../store/store.js";
 import type {
   AgentEvent,
   IncomingMessage,
+  OutgoingMessage,
   PermissionDecision,
   Project,
   Reaction,
@@ -86,6 +87,15 @@ export class CoreApp {
     this.controlChannel = msg.channelId;
     this.logger.debug("control message", { text: msg.text });
     const parsed = parseInput(msg.text);
+
+    // A reply/quote to a project's message routes to that project.
+    if (msg.quoteId) {
+      const quotedProject = this.store.getValue(`msgProject:${msg.quoteId}`);
+      if (quotedProject) {
+        this.store.setValue(`activeProject:${this.controlChannel}`, quotedProject);
+        this.logger.debug("routed by quote", { projectId: quotedProject });
+      }
+    }
 
     if (parsed.kind === "approval") {
       if (this.pending().length > 0) {
@@ -191,10 +201,7 @@ export class CoreApp {
     this.store.setSession(project.id, started.sessionId);
     this.store.createTask(task);
 
-    const { messageId } = await this.signal.send(
-      this.controlChannel,
-      statusLine(task, "queued"),
-    );
+    const { messageId } = await this.sendProject(project.id, statusLine(task, "queued"));
     this.store.setValue(`statusMsg:${task.id}`, messageId);
     this.logger.info("task started", { taskId: task.id, project: project.name });
   }
@@ -265,7 +272,7 @@ export class CoreApp {
       });
       const done = this.store.getTask(task.id)!;
       await this.editStatus(done, event.summary);
-      await this.signal.send(this.controlChannel, summaryText(done));
+      await this.sendProject(done.projectId, summaryText(done));
       if (event.diffPath) {
         await this.signal.attach(this.controlChannel, event.diffPath, "diff");
       }
@@ -278,14 +285,15 @@ export class CoreApp {
         error: event.text ?? "unknown error",
         updatedAt: this.now(),
       });
-      await this.editStatus(this.store.getTask(task.id)!, event.text);
-      await this.signal.send(this.controlChannel, summaryText(this.store.getTask(task.id)!));
+      const failed = this.store.getTask(task.id)!;
+      await this.editStatus(failed, event.text);
+      await this.sendProject(failed.projectId, summaryText(failed));
       return;
     }
 
     const milestone = milestoneText(event);
     if (milestone) {
-      await this.signal.send(this.controlChannel, milestone);
+      await this.sendProject(task.projectId, milestone);
     }
 
     this.store.updateTask(task.id, { state: "running", updatedAt: this.now() });
@@ -298,13 +306,29 @@ export class CoreApp {
     if (messageId) {
       await this.signal.edit(this.controlChannel, messageId, text);
     } else {
-      const sent = await this.signal.send(this.controlChannel, text);
+      const sent = await this.sendProject(task.projectId, text);
       this.store.setValue(`statusMsg:${task.id}`, sent.messageId);
     }
   }
 
-  // --- approvals -----------------------------------------------------------
+  /** Send a message and remember which project it belongs to (for quote routing). */
+  private async sendProject(projectId: string, text: string): Promise<OutgoingMessage> {
+    const sent = await this.signal.send(this.controlChannel, text);
+    this.store.setValue(`msgProject:${sent.messageId}`, projectId);
+    return sent;
+  }
 
+  /** Called when a project's plugin connects: greet and tag the message. */
+  async notifyProjectConnected(projectId: string): Promise<void> {
+    const project = this.store.getProject(projectId);
+    const name = project?.name ?? projectId;
+    await this.sendProject(
+      projectId,
+      `Project "${name}" connected. Reply to this message to address it, or use /use ${name}.`,
+    );
+  }
+
+  // --- approvals -----------------------------------------------------------
   private pending(): PendingApproval[] {
     const raw = this.store.getValue(`pending:${this.controlChannel}`);
     return raw ? (JSON.parse(raw) as PendingApproval[]) : [];
@@ -327,8 +351,8 @@ export class CoreApp {
     }
     const list = this.pending();
     const number = list.length + 1;
-    const sent = await this.signal.send(
-      this.controlChannel,
+    const sent = await this.sendProject(
+      task.projectId,
       `Permission #${number}: ${p.tool}\n${p.description}\nReply approve / deny / always, or react.`,
     );
     list.push({

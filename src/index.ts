@@ -62,6 +62,13 @@ async function main(): Promise<void> {
 
   const app = new CoreApp({ store, signal, agent, config, logger });
   await app.start();
+
+  // When a project's plugin connects, greet the operator on that project's behalf.
+  hub.onConnect((conn) => {
+    void app
+      .notifyProjectConnected(conn.projectId)
+      .catch((err: unknown) => logger.warn("connect notify failed", { error: String(err) }));
+  });
   logger.info("SignalConnector is running");
 
   const shutdown = async (): Promise<void> => {

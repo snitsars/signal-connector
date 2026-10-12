@@ -55,6 +55,24 @@ The service owns Signal, the command router, and state. The **agent side** has t
 3. Open a project in opencode. The plugin at `.opencode/plugins/signal-connector.ts` connects,
    registers its project, and starts handling commands.
 
+**Multi-project quick start** — one command installs the plugin globally, sets plugin mode,
+starts the service, and opens each project in opencode:
+
+```powershell
+pwsh scripts/start-all.ps1 -Projects C:\Sources\appA, C:\Sources\appB
+```
+
+Each project registers and the service sends a Signal greeting you can **reply to**:
+
+```
+Project "appA" connected. Reply to this message to address it, or use /use appA.
+```
+
+**Addressing a project:**
+- `/use <project>` then send commands, or
+- **reply (quote) any message that belongs to a project** — the service routes that reply to the
+  same project automatically (it tracks which project each outgoing message came from).
+
 ```
 Signal  <->  service (Signal + router)  <--WebSocket-->  plugin (per project)  <->  opencode
 ```

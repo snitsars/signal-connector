@@ -30,6 +30,8 @@ export class BridgeHub {
   private readonly connections = new Map<string, PluginConnection>();
   private readonly eventHandlers: ((e: EventEnvelope) => void)[] = [];
   private readonly sessionWaiters = new Map<string, (sessionId: string) => void>();
+  private readonly connectHandlers: ((c: PluginConnection) => void)[] = [];
+  private readonly disconnectHandlers: ((c: PluginConnection) => void)[] = [];
 
   register(send: (m: BridgeOutbound) => void, msg: RegisterMessage): PluginConnection {
     const projectId = projectIdFor(msg.project);
@@ -41,6 +43,7 @@ export class BridgeHub {
     };
     this.connections.set(projectId, conn);
     send({ type: "registered", projectId, projectName: msg.project.name });
+    for (const handler of this.connectHandlers) handler(conn);
     return conn;
   }
 
@@ -67,7 +70,10 @@ export class BridgeHub {
   }
 
   unregister(conn: PluginConnection): void {
-    if (this.connections.get(conn.projectId) === conn) this.connections.delete(conn.projectId);
+    if (this.connections.get(conn.projectId) === conn) {
+      this.connections.delete(conn.projectId);
+      for (const handler of this.disconnectHandlers) handler(conn);
+    }
   }
 
   get(projectId: string): PluginConnection | undefined {
@@ -84,6 +90,14 @@ export class BridgeHub {
 
   onEvent(handler: (e: EventEnvelope) => void): void {
     this.eventHandlers.push(handler);
+  }
+
+  onConnect(handler: (c: PluginConnection) => void): void {
+    this.connectHandlers.push(handler);
+  }
+
+  onDisconnect(handler: (c: PluginConnection) => void): void {
+    this.disconnectHandlers.push(handler);
   }
 
   requestSession(projectId: string, requestId: string, timeoutMs = 10_000): Promise<string> {

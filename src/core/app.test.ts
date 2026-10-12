@@ -131,4 +131,20 @@ describe("CoreApp", () => {
     await tick();
     expect(ctx.agent.decisions).toEqual([{ permissionId: "p3", decision: "reject" }]);
   });
+
+  it("greets on project connect and routes a quoted reply to that project", async () => {
+    await ctx.app.notifyProjectConnected("demo");
+    await tick();
+    const greeting = ctx.signal.sent.at(-1)!;
+    expect(greeting.text).toBe(
+      'Project "demo" connected. Reply to this message to address it, or use /use demo.',
+    );
+
+    // A reply that quotes the greeting routes the free-form text to demo.
+    ctx.signal.emitMessage({ ...incoming("add a retry"), quoteId: greeting.messageId });
+    await tick();
+    expect(ctx.agent.started).toHaveLength(1);
+    expect(ctx.agent.started[0]?.prompt).toBe("add a retry");
+    expect(ctx.agent.started[0]?.project.id).toBe("demo");
+  });
 });
