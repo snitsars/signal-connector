@@ -38,11 +38,17 @@ export const ConfigSchema = z.object({
     }),
   agent: z
     .object({
-      kind: z.enum(["opencode-server", "opencode-cli"]).default("opencode-server"),
+      kind: z.enum(["opencode-server", "opencode-cli", "plugin"]).default("opencode-server"),
       serverUrl: z.string().default("http://127.0.0.1:4096"),
       opencodePath: z.string().default("opencode"),
     })
     .default({ kind: "opencode-server", serverUrl: "http://127.0.0.1:4096", opencodePath: "opencode" }),
+  bridge: z
+    .object({
+      host: z.string().default("127.0.0.1"),
+      port: z.number().int().default(8790),
+    })
+    .default({ host: "127.0.0.1", port: 8790 }),
   projects: z
     .array(z.object({ name: z.string(), path: z.string() }))
     .default([]),

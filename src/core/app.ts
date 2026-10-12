@@ -84,6 +84,7 @@ export class CoreApp {
   private async handleMessage(msg: IncomingMessage): Promise<void> {
     if (!msg.inControlChannel) return;
     this.controlChannel = msg.channelId;
+    this.logger.debug("control message", { text: msg.text });
     const parsed = parseInput(msg.text);
 
     if (parsed.kind === "approval") {

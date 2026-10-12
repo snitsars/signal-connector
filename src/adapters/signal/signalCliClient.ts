@@ -63,6 +63,9 @@ export class SignalCliClient implements SignalPort {
   private timer: NodeJS.Timeout | undefined;
   private running = false;
   private rpcId = 0;
+  /** Timestamps of messages we sent, to ignore their Note-to-Self sync echo. */
+  private readonly sentTimestamps = new Set<string>();
+  private sentOrder: string[] = [];
 
   constructor(options: SignalCliOptions) {
     this.opts = {
@@ -153,6 +156,8 @@ export class SignalCliClient implements SignalPort {
     if (sent) {
       const destination = sent.destinationNumber ?? sent.destination ?? "";
       if (destination !== this.opts.account) return;
+      // Ignore the sync echo of our own outgoing messages (prevents a loop).
+      if (this.sentTimestamps.has(String(sent.timestamp ?? env.timestamp ?? ""))) return;
       const at = sent.timestamp ?? env.timestamp ?? Date.now();
       const channelId = this.opts.account;
       if (sent.reaction) {
@@ -188,10 +193,12 @@ export class SignalCliClient implements SignalPort {
 
   async send(channelId: string, text: string): Promise<OutgoingMessage> {
     await this.limiter.acquire();
+    this.opts.logger.debug("signal send", { text });
     const result = await this.rpc<{ timestamp?: number }>("send", {
       recipient: this.recipientFor(channelId),
       message: text,
     });
+    this.rememberSent(result.timestamp);
     return { messageId: String(result.timestamp ?? Date.now()) };
   }
 
@@ -211,12 +218,24 @@ export class SignalCliClient implements SignalPort {
       message: caption ?? "",
       attachment: [filePath],
     });
+    this.rememberSent(result.timestamp);
     return { messageId: String(result.timestamp ?? Date.now()) };
   }
 
   private recipientFor(channelId: string): string {
     if (channelId === "self" || channelId === this.opts.account) return this.opts.account;
     return channelId;
+  }
+
+  private rememberSent(timestamp: number | undefined): void {
+    if (timestamp == null) return;
+    const key = String(timestamp);
+    this.sentTimestamps.add(key);
+    this.sentOrder.push(key);
+    if (this.sentOrder.length > 100) {
+      const oldest = this.sentOrder.shift();
+      if (oldest) this.sentTimestamps.delete(oldest);
+    }
   }
 
   onMessage(handler: (m: IncomingMessage) => void): void {

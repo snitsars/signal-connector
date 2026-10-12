@@ -6,6 +6,8 @@ import path from "node:path";
 import { createAgentAdapter } from "./adapters/agent/factory.js";
 import { SignalCliDaemon } from "./adapters/signal/daemon.js";
 import { SignalCliClient } from "./adapters/signal/signalCliClient.js";
+import { BridgeHub } from "./bridge/hub.js";
+import { startBridgeServer } from "./bridge/server.js";
 import { dataDir, loadConfig } from "./config/config.js";
 import { defaultSecretStore } from "./config/secrets.js";
 import { CoreApp } from "./core/app.js";
@@ -46,7 +48,14 @@ async function main(): Promise<void> {
     : undefined;
   if (daemon) await daemon.start();
 
-  const agent = await createAgentAdapter(config, logger);
+  const hub = new BridgeHub();
+  const bridge = startBridgeServer(hub, {
+    host: config.bridge.host,
+    port: config.bridge.port,
+    logger,
+  });
+
+  const agent = await createAgentAdapter(config, logger, hub);
 
   // Secrets are resolved lazily by adapters that need them; keep the store ready.
   void secrets;
@@ -59,6 +68,7 @@ async function main(): Promise<void> {
     logger.info("shutting down");
     await app.stop();
     await daemon?.stop();
+    bridge.close();
     store.close();
     process.exit(0);
   };

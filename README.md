@@ -38,6 +38,31 @@ src/
   cli/        link, dry-run
 ```
 
+## Integration modes
+
+The service owns Signal, the command router, and state. The **agent side** has two modes:
+
+- **Standalone** (`agent.kind = "opencode-server"` or `"opencode-cli"`): the service drives opencode
+  directly (server API with CLI fallback). Good for a single project / agent-agnostic use.
+- **Plugin** (`agent.kind = "plugin"`): the service routes commands to a per-project **opencode
+  plugin** over a local WebSocket; the plugin executes them inside opencode and streams events and
+  permission requests back. Use this for **multiple projects** — one Signal channel, no race.
+
+### Plugin mode
+
+1. Set `agent.kind = "plugin"` in `config.toml` (bridge defaults to `127.0.0.1:8790`).
+2. Run the service (`pwsh scripts/run.ps1`).
+3. Open a project in opencode. The plugin at `.opencode/plugins/signal-connector.ts` connects,
+   registers its project, and starts handling commands.
+
+```
+Signal  <->  service (Signal + router)  <--WebSocket-->  plugin (per project)  <->  opencode
+```
+
+Message flow: the service receives a Signal command, routes it to the active project's plugin;
+the plugin runs it via the SDK `client`; progress/permissions flow back as bridge events and are
+rendered to Signal. Approvals are answered from Signal and relayed to the plugin.
+
 ## Host setup (Windows, scripted)
 
 Prerequisites: Windows 10+, Node ≥ 20. The scripts install the rest.
