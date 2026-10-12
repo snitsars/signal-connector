@@ -12,10 +12,12 @@
 
 .EXAMPLE
   pwsh scripts/start-all.ps1 -Projects C:\Sources\appA, C:\Sources\appB
+  pwsh scripts/start-all.ps1 -Projects "C:\Sources\appA" "C:\Sources\appB"
+  pwsh scripts/start-all.ps1 -Projects @("C:\Sources\appA","C:\Sources\appB") -BridgePort 9000
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)][string[]]$Projects,
+    [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)][string[]]$Projects,
     [int]$BridgePort = 8790
 )
 
