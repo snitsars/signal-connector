@@ -17,12 +17,23 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)][string[]]$Projects,
-    [int]$BridgePort = 8790
+    [Parameter(Mandatory = $true, ValueFromRemainingArguments = $true)][string[]]$Projects
 )
+
+$BridgePort = 8790
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+
+# Normalize -Projects: PowerShell may hand "-Projects a,b" over as one
+# comma-joined string, and "a, b" as separate tokens. Split on commas either way.
+$Projects = @(
+    $Projects |
+        ForEach-Object { $_ -split ',' } |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -ne '' }
+)
+if ($Projects.Count -eq 0) { throw "No project paths given." }
 
 # 1. Install the plugin globally so any project loads it.
 $pluginSrc = Join-Path $root '.opencode\plugins\signal-connector.ts'
@@ -48,10 +59,15 @@ if (Test-Path $cfg) {
     Write-Host "No config found — run scripts/setup.ps1 first." -ForegroundColor Yellow
 }
 
-# 3. Start the service.
-Write-Host "starting service..."
-Start-Process -FilePath "pwsh" -ArgumentList '-NoProfile', '-File', (Join-Path $PSScriptRoot 'run.ps1') -WindowStyle Hidden
-Start-Sleep -Seconds 6
+# 3. Start the service (unless it is already listening on the bridge port).
+$listening = Get-NetTCPConnection -LocalPort $BridgePort -State Listen -ErrorAction SilentlyContinue
+if ($listening) {
+    Write-Host "service already running (bridge $BridgePort)" -ForegroundColor Green
+} else {
+    Write-Host "starting service..."
+    Start-Process -FilePath "pwsh" -ArgumentList '-NoProfile', '-File', (Join-Path $PSScriptRoot 'run.ps1') -WindowStyle Hidden
+    Start-Sleep -Seconds 6
+}
 
 # 4. Open each project in opencode (loads the global plugin -> registers with the service).
 foreach ($p in $Projects) {
