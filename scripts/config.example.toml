@@ -28,3 +28,6 @@ maxPerMinute = 20            # rolling cap
 [[projects]]
 name = "myproject"
 path = 'C:\Sources\myproject'
+# session = 'ses_...'          # optional: pin tasks to an existing opencode session
+# launch = { kind = "herdr" }  # optional: /use opens a visible Herdr workspace
+# launch = { kind = "command", argv = ['opencode', '{path}'] }  # or any command

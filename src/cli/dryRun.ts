@@ -13,7 +13,9 @@ import type {
   AgentEvent,
   IncomingMessage,
   OutgoingMessage,
+  ModelRef,
   PermissionDecision,
+  PollVote,
   Reaction,
 } from "../domain/types.js";
 import { createLogger } from "../logging/logger.js";
@@ -24,6 +26,7 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 class ConsoleSignal implements SignalPort {
   private messageHandlers: ((m: IncomingMessage) => void)[] = [];
   private reactionHandlers: ((r: Reaction) => void)[] = [];
+  private pollVoteHandlers: ((v: PollVote) => void)[] = [];
   private seq = 0;
 
   async start(): Promise<void> {}
@@ -32,6 +35,19 @@ class ConsoleSignal implements SignalPort {
   async send(_channelId: string, text: string): Promise<OutgoingMessage> {
     process.stdout.write(`[signal] ${text}\n`);
     return { messageId: `m${++this.seq}` };
+  }
+  async sendPoll(
+    _channelId: string,
+    question: string,
+    options: string[],
+  ): Promise<OutgoingMessage> {
+    process.stdout.write(
+      `[signal poll] ${question}\n${options.map((o, i) => `  ${i + 1}. ${o}`).join("\n")}\n`,
+    );
+    return { messageId: `poll${++this.seq}` };
+  }
+  onPollVote(handler: (v: PollVote) => void): void {
+    this.pollVoteHandlers.push(handler);
   }
   async edit(_channelId: string, messageId: string, text: string): Promise<void> {
     process.stdout.write(`[signal edit ${messageId}] ${text}\n`);
@@ -70,6 +86,15 @@ class ScriptedAgent implements AgentPort {
   async newSession(): Promise<{ sessionId: string }> {
     return { sessionId: `dry-${++this.seq}` };
   }
+
+  async listModels(): Promise<ModelRef[]> {
+    return [
+      { providerID: "demo", id: "model-a", name: "demo/model-a" },
+      { providerID: "demo", id: "model-b", name: "demo/model-b" },
+    ];
+  }
+
+  async setModel(): Promise<void> {}
   subscribe(handler: (e: AgentEvent) => void): void {
     this.handlers.push(handler);
   }
@@ -81,7 +106,9 @@ class ScriptedAgent implements AgentPort {
     }
   }
   async abort(): Promise<void> {}
-
+  isConnected(): boolean {
+    return true;
+  }
   private emit(event: AgentEvent): void {
     for (const handler of this.handlers) handler(event);
   }

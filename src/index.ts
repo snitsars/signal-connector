@@ -4,6 +4,7 @@
  */
 import path from "node:path";
 import { createAgentAdapter } from "./adapters/agent/factory.js";
+import { ProjectLaunchers } from "./adapters/launcher/registry.js";
 import { SignalCliDaemon } from "./adapters/signal/daemon.js";
 import { SignalCliClient } from "./adapters/signal/signalCliClient.js";
 import { BridgeHub } from "./bridge/hub.js";
@@ -11,6 +12,7 @@ import { startBridgeServer } from "./bridge/server.js";
 import { dataDir, loadConfig } from "./config/config.js";
 import { defaultSecretStore } from "./config/secrets.js";
 import { CoreApp } from "./core/app.js";
+import type { LauncherPort } from "./core/ports.js";
 import { createLogger } from "./logging/logger.js";
 import { openStore } from "./store/store.js";
 
@@ -34,6 +36,7 @@ async function main(): Promise<void> {
     endpoint: `http://${config.signal.daemonHost}:${config.signal.daemonPort}/api/v1/rpc`,
     account,
     channelId: config.channel.id ?? "self",
+    mediaDir: path.join(dir, "media"),
     logger,
   });
 
@@ -49,6 +52,7 @@ async function main(): Promise<void> {
   if (daemon) await daemon.start();
 
   const hub = new BridgeHub();
+  hub.onDiag((projectId, detail) => logger.warn("plugin diagnostic", { project: projectId, detail }));
   const bridge = startBridgeServer(hub, {
     host: config.bridge.host,
     port: config.bridge.port,
@@ -60,7 +64,14 @@ async function main(): Promise<void> {
   // Secrets are resolved lazily by adapters that need them; keep the store ready.
   void secrets;
 
-  const app = new CoreApp({ store, signal, agent, config, logger });
+  const app = new CoreApp({
+    store,
+    signal,
+    agent,
+    config,
+    logger,
+    launcher: new ProjectLaunchers(config, logger),
+  });
   await app.start();
 
   // When a project's plugin connects, register it and greet the operator on its

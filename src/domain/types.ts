@@ -32,6 +32,9 @@ export type AgentEventType =
   | "files-changed"
   | "tests-run"
   | "permission"
+  | "choices"
+  /** Something the operator should know but cannot act on (e.g. a question). */
+  | "notice"
   | "error"
   | "idle";
 
@@ -46,6 +49,13 @@ export interface PermissionRequest {
 
 export type PermissionDecision = "once" | "always" | "reject";
 
+/** A model an agent can run: `providerID/id`, e.g. `opencode-go/deepseek-v4.1-flash`. */
+export interface ModelRef {
+  providerID: string;
+  id: string;
+  name?: string;
+}
+
 export interface AgentEvent {
   type: AgentEventType;
   taskId: string;
@@ -55,6 +65,10 @@ export interface AgentEvent {
   permission?: PermissionRequest;
   /** For "files-changed": the changed paths. */
   files?: string[];
+  /** For "choices": the options the operator can pick from. */
+  choices?: string[];
+  /** Local files to send to Signal (opencode -> operator). */
+  attachPaths?: string[];
   /** For completion: a short summary of what the task did. */
   summary?: string;
   /** For completion: a path to a diff to attach. */
@@ -70,6 +84,8 @@ export interface IncomingMessage {
   /** True when this message belongs to the configured control channel. */
   inControlChannel: boolean;
   quoteId?: string;
+  /** Local paths of inbound attachments, saved so the agent can open them. */
+  mediaPaths?: string[];
 }
 
 export interface Reaction {
@@ -78,6 +94,16 @@ export interface Reaction {
   emoji: string;
   /** The message the reaction targets. */
   targetId: string;
+  at: number;
+}
+
+/** An option a poll recipient picked. */
+export interface PollVote {
+  channelId: string;
+  /** The poll message the vote belongs to. */
+  targetId: string;
+  /** 1-based option numbers, matching the order the options were sent in. */
+  indexes: number[];
   at: number;
 }
 

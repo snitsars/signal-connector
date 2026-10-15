@@ -55,8 +55,8 @@ client with `ctx.session.*`, `ctx.permission.*`, `ctx.event.subscribe`).
 
 1. Set `agent.kind = "plugin"` in `config.toml` (bridge defaults to `127.0.0.1:8790`).
 2. Run the service (`pwsh scripts/run.ps1`).
-3. Open a project in opencode. The plugin at `.opencode/plugins/signal-connector.ts` connects,
-   registers its project, and starts handling commands.
+3. Open a project in opencode. The plugin at `plugins/signal-connector.ts` (installed globally by
+   `scripts/start-all.ps1`) connects, registers its project, and starts handling commands.
 
 **Multi-project quick start** — one command installs the plugin globally, sets plugin mode,
 starts the service, and opens each project in opencode:
@@ -75,6 +75,88 @@ Project "appA" connected. Reply to this message to address it, or use /use appA.
 - `/use <project>` then send commands, or
 - **reply (quote) any message that belongs to a project** — the service routes that reply to the
   same project automatically (it tracks which project each outgoing message came from).
+
+**Working in one session:** by default each `/task` creates a fresh opencode session. To send
+commands into a session you already have open, pin the project to it:
+
+```toml
+[[projects]]
+name = "SignalConnector"
+path = 'C:\Sources\SignalConnector'
+session = 'ses_ec42cabb8ffe8UkLJmCcd8w06c'   # the id shown in OPENCODE_SESSION_ID
+```
+
+Restart the service after editing, and `/new` moves the project off the pin.
+
+### Interactive choices (tap instead of type)
+
+Signal messages are plain text, so there are no buttons to send. The equivalent is a **reaction**:
+an assistant message can offer options by ending with a marker, and the service posts them as a
+numbered, tappable menu.
+
+```
+Which approach do you want?
+<<options: add a retry loop | revert the change | do both>>
+```
+
+In Signal this becomes:
+
+```
+Option #1 — tap a reaction or reply with the number:
+1. ❤️ add a retry loop
+2. 👍 revert the change
+3. 👎 do both
+```
+
+The operator either taps one of the six reactions in Signal's quick row (❤️ 👍 👎 😂 😮 😢, or the
+keycap digits) or replies with the bare number. Either way the option's text is sent into the
+project's session as the next prompt. The marker is stripped from the message text. With several
+menus open, a reaction targets the menu it was tapped on; a bare number only counts while exactly
+one menu is open.
+
+The emoji map lives in `CHOICE_EMOJI` (`src/core/progress.ts`), and the marker grammar in
+`extractOptions` (`plugins/signal-connector.ts`). Several picks can be sent at once (`1,3`); numbers
+answer the newest open menu, and any other free-form prompt closes open menus. Menus survive the end
+of the task that opened them — asking at the end of a turn is the normal case.
+
+### Inbound attachments
+
+An image (or any file) sent to the control channel is fetched from the daemon
+(`getAttachment`, base64), written to `<dataDir>/media/<timestamp>-<name>`, and the path is added to
+the prompt as `[attached file: …]`. The agent runs on the same machine and opens the file directly,
+so no extra plugin protocol is involved. Attachments over 10 MiB are reported and skipped, and file
+names are sanitized so a name cannot escape the media dir. Media rides on free-form messages only —
+`/task …` does not carry an attachment.
+
+**Outbound** (opencode → operator) uses the same idea as option menus — name the files in the
+message:
+
+```
+Here is the screenshot you asked for.
+<<send: C:\tmp\shot.png>>
+```
+
+The marker is stripped from the text shown in Signal and each path is sent as an attachment (several
+paths can be `|`-separated). A path that cannot be sent is reported back instead of failing quietly.
+
+### Questions
+
+opencode's own questions (the popup with options) can only be answered by its own client: this build
+exposes no question API to plugins, so the connector cannot answer them from Signal. It does the next
+best thing — it tells you a question is waiting, so the agent is not left blocking in silence:
+
+```
+Project: Phoenix
+opencode is asking a question — it has to be answered in the window; the agent is waiting.
+```
+
+Project-scoped output (status, milestones, summaries, errors, permission prompts) is prefixed with
+the project it came from, so you always know the source:
+
+```
+Project: appA
+Task 3f9c… (running) — editing src/http.ts
+```
 
 ```
 Signal  <->  service (Signal + router)  <--WebSocket-->  plugin (per project)  <->  opencode
@@ -139,7 +221,10 @@ approve        # when a permission prompt appears
 | Command | Effect |
 |---|---|
 | `/projects` | list configured projects |
-| `/use <project>` | set the active project |
+| `/use <project>` | set the active project (starts it if a `launch` is configured and nothing is connected) |
+| `/open <project>` | always open the project in a new window and make it active |
+| `/models` | list this project's models and pick one (tap the poll or reply with a number) |
+| `/model <provider/id>` | switch the session's model directly |
 | `/task <prompt>` | start a task in the active project |
 | `/status` | show the latest task state |
 | `/new` | fork a fresh session for the active project |

@@ -3,7 +3,7 @@
  * plugins (spine AD-5: the agent boundary). One shared Signal channel; each
  * plugin owns exactly one project.
  */
-import type { AgentEvent, PermissionDecision } from "../domain/types.js";
+import type { AgentEvent, ModelRef, PermissionDecision } from "../domain/types.js";
 
 export interface ProjectRef {
   name: string;
@@ -31,15 +31,30 @@ export interface SessionCreatedMessage {
   sessionId: string;
 }
 
+export interface ModelsMessage {
+  type: "models";
+  requestId: string;
+  models: ModelRef[];
+}
+
 export interface PongMessage {
   type: "pong";
+}
+
+/** A plugin reporting its own trouble, so it lands in the service log. */
+export interface DiagMessage {
+  type: "diag";
+  detail: string;
 }
 
 export type PluginToService =
   | RegisterMessage
   | EventMessage
   | SessionCreatedMessage
-  | PongMessage;
+  | ModelsMessage
+  | ModelSetMessage
+  | PongMessage
+  | DiagMessage;
 
 // --- service -> plugin ------------------------------------------------------
 
@@ -63,6 +78,27 @@ export interface NewSessionCommand {
   requestId: string;
 }
 
+export interface ListModelsCommand {
+  type: "command";
+  kind: "listModels";
+  requestId: string;
+}
+
+export interface SetModelCommand {
+  type: "command";
+  kind: "setModel";
+  requestId: string;
+  sessionId: string;
+  model: ModelRef;
+}
+
+export interface ModelSetMessage {
+  type: "model_set";
+  requestId: string;
+  ok: boolean;
+  detail?: string;
+}
+
 export interface PermissionReplyMessage {
   type: "permission_reply";
   permissionId: string;
@@ -77,6 +113,8 @@ export type ServiceToPlugin =
   | PromptCommand
   | StopCommand
   | NewSessionCommand
+  | ListModelsCommand
+  | SetModelCommand
   | PermissionReplyMessage
   | PingMessage;
 

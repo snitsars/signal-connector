@@ -50,7 +50,31 @@ export const ConfigSchema = z.object({
     })
     .default({ host: "127.0.0.1", port: 8790 }),
   projects: z
-    .array(z.object({ name: z.string(), path: z.string() }))
+    .array(
+      z.object({
+        name: z.string(),
+        path: z.string(),
+        /**
+         * Optional opencode session id to pin the project to. When set, tasks go
+         * into that existing session (for example the operator's own session)
+         * instead of a fresh one per task.
+         */
+        session: z.string().optional(),
+        /**
+         * How to start this project when nothing is connected: a visible Herdr
+         * workspace by default, or an arbitrary command with {path}/{name}.
+         */
+        launch: z
+          .object({
+            kind: z.enum(["herdr", "command"]).default("herdr"),
+            /** Agent kind Herdr starts (only for kind = "herdr"). */
+            agent: z.string().default("opencode"),
+            /** argv template (only for kind = "command"). */
+            argv: z.array(z.string()).optional(),
+          })
+          .optional(),
+      }),
+    )
     .default([]),
   outbound: z
     .object({

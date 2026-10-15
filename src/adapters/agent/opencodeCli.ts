@@ -5,7 +5,7 @@
  */
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { AgentPort, StartTaskInput } from "../../core/ports.js";
-import type { AgentEvent, PermissionDecision, Project } from "../../domain/types.js";
+import type { AgentEvent, ModelRef, PermissionDecision, Project } from "../../domain/types.js";
 import type { Logger } from "../../logging/logger.js";
 import { resolveCommand } from "../spawnCommand.js";
 import { writeDiffFile } from "./diff.js";
@@ -48,6 +48,11 @@ export class OpenCodeCliAdapter implements AgentPort {
     });
   }
 
+  /** Standalone adapters drive opencode directly, so nothing needs launching. */
+  isConnected(): boolean {
+    return true;
+  }
+
   async startTask(input: StartTaskInput): Promise<{ sessionId: string }> {
     const sessionId = input.sessionId ?? `${input.project.id}-${Date.now()}`;
     const args = ["run", "--format", "json", "--session", sessionId, "--", input.prompt];
@@ -64,6 +69,15 @@ export class OpenCodeCliAdapter implements AgentPort {
 
   async newSession(project: Project): Promise<{ sessionId: string }> {
     return { sessionId: `${project.id}-${Date.now()}` };
+  }
+
+  /** Model selection needs a live opencode session; only plugin mode has one. */
+  async listModels(): Promise<ModelRef[]> {
+    throw new Error("model selection needs the plugin agent mode");
+  }
+
+  async setModel(): Promise<void> {
+    throw new Error("model selection needs the plugin agent mode");
   }
 
   private pump(taskId: string, child: ChildProcess, project: Project): void {

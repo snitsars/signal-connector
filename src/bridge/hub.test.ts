@@ -29,8 +29,15 @@ describe("BridgeHub", () => {
     expect(got[0]?.event.text).toBe("hi");
   });
 
-  it("resolves a newSession request from the plugin", async () => {
+  it("waits for the plugin to confirm a model switch", async () => {
     const hub = new BridgeHub();
+    const conn = hub.register(() => {}, { type: "register", project: { name: "app", path: "/a" } });
+    const pending = hub.requestSetModel("app", "r1", "", { providerID: "p", id: "m" });
+    hub.dispatch(conn, { type: "model_set", requestId: "r1", ok: false, detail: "nope" });
+    await expect(pending).resolves.toEqual({ type: "model_set", requestId: "r1", ok: false, detail: "nope" });
+  });
+
+  it("resolves a newSession request from the plugin", async () => {    const hub = new BridgeHub();
     const sent: ServiceToPlugin[] = [];
     const conn = hub.register((m) => sent.push(m), {
       type: "register",
@@ -45,6 +52,15 @@ describe("BridgeHub", () => {
   it("rejects a request when no plugin is connected", async () => {
     const hub = new BridgeHub();
     await expect(hub.requestSession("nope", "r")).rejects.toThrow(/no plugin/);
+  });
+
+  it("routes plugin diagnostics to a handler", () => {
+    const hub = new BridgeHub();
+    const conn = hub.register(() => {}, { type: "register", project: { name: "app", path: "/a" } });
+    const seen: string[] = [];
+    hub.onDiag((projectId, detail) => seen.push(`${projectId}: ${detail}`));
+    hub.dispatch(conn, { type: "diag", detail: "permission poll failed: boom" });
+    expect(seen).toEqual(["app: permission poll failed: boom"]);
   });
 
   it("unregisters on disconnect", () => {

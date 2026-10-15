@@ -46,3 +46,44 @@ export function summaryText(task: Task): string {
       return statusLine(task);
   }
 }
+
+/**
+ * Signal messages are plain text — there are no buttons to send. The closest
+ * thing to "tap an option instead of typing" is a reaction, so an option list is
+ * rendered numbered and paired with emoji. These are the six reactions Signal
+ * clients put in the quick row, so one tap is enough (no picker hunting); the
+ * keycap digits are accepted too for clients that offer them.
+ */
+export const CHOICE_EMOJI = ["❤️", "👍", "👎", "😂", "😮", "😢"];
+
+const KEYCAPS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"];
+
+/** Variation selectors and joiners differ between clients; ignore them. */
+function fold(emoji: string): string {
+  return emoji.replace(/[\uFE0E\uFE0F\u200D]/g, "");
+}
+
+const FOLDED_CHOICE = CHOICE_EMOJI.map(fold);
+const FOLDED_KEYCAPS = KEYCAPS.map(fold);
+
+/** The reaction that selects option `index` (1-based), if the row is long enough. */
+export function choiceEmoji(index: number): string | undefined {
+  return CHOICE_EMOJI[index - 1];
+}
+
+/** Which option a tapped reaction selects, or undefined if it is not a choice. */
+export function emojiChoice(emoji: string, count: number): number | undefined {
+  const tapped = fold(emoji);
+  const keycap = FOLDED_KEYCAPS.indexOf(tapped) + 1;
+  const index = keycap > 0 ? keycap : FOLDED_CHOICE.indexOf(tapped) + 1;
+  return index > 0 && index <= count ? index : undefined;
+}
+
+/** Render an option menu for Signal. */
+export function choicesText(options: string[], label?: string): string {
+  const lines = options.map((option, i) => {
+    const emoji = choiceEmoji(i + 1);
+    return `${i + 1}. ${emoji ? `${emoji} ` : ""}${option}`;
+  });
+  return [`${label ?? "Options"} — tap a reaction or reply with the number:`, ...lines].join("\n");
+}

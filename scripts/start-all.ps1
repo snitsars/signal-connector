@@ -6,6 +6,8 @@
 
 .DESCRIPTION
   - installs the plugin globally (~/.config/opencode/plugins) so every project loads it
+    (the source lives at <repo>/plugins/signal-connector.ts, outside .opencode/plugins, so
+    opening this repo in opencode does not load a second copy with the same plugin id)
   - sets agent.kind = "plugin" in the service config
   - starts the service
   - opens opencode in each given project (each registers and gets a Signal greeting)
@@ -35,8 +37,10 @@ $Projects = @(
 )
 if ($Projects.Count -eq 0) { throw "No project paths given." }
 
-# 1. Install the plugin globally so any project loads it.
-$pluginSrc = Join-Path $root '.opencode\plugins\signal-connector.ts'
+# 1. Install the plugin globally so any project loads it. The source is kept out of
+#    .opencode/plugins/ on purpose: opencode auto-loads that path, which would collide
+#    with the global copy on the same plugin id ("Duplicate plugin ID").
+$pluginSrc = Join-Path $root 'plugins\signal-connector.ts'
 $pluginDir = Join-Path $env:USERPROFILE '.config\opencode\plugins'
 New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
 Copy-Item $pluginSrc (Join-Path $pluginDir 'signal-connector.ts') -Force

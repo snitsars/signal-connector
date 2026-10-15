@@ -64,17 +64,17 @@ describe("end-to-end notification flow", () => {
     // First op: the active-project confirmation.
     expect(signal.ops[0]).toMatchObject({ op: "send", text: "Active project: demo" });
     // Exactly one status message, edited in place (never duplicated).
-    const statusSend = signal.ops.find((o) => o.op === "send" && o.text.startsWith("Task "))!;
+    const statusSend = signal.ops.find((o) => o.op === "send" && o.text.startsWith("Project: demo\nTask "))!;
     const edits = signal.ops.filter((o) => o.op === "edit");
     expect(edits.length).toBeGreaterThan(0);
     expect(edits.every((o) => o.op === "edit" && o.messageId === statusSend.messageId)).toBe(true);
-    expect(signal.ops.filter((o) => o.op === "send" && o.text.startsWith("Task "))).toHaveLength(1);
+    expect(signal.ops.filter((o) => o.op === "send" && o.text.startsWith("Project: demo\nTask "))).toHaveLength(1);
 
     const all = texts(signal);
-    expect(all).toContain("Changed 1 file(s): a.ts");
-    expect(all.some((t) => t.startsWith("Permission #1"))).toBe(true);
+    expect(all).toContain("Project: demo\nChanged 1 file(s): a.ts");
+    expect(all.some((t) => t.startsWith("Project: demo\nPermission #1"))).toBe(true);
     expect(all).toContain("approved: bash");
-    expect(all).toContain("Done: added retry");
+    expect(all).toContain("Project: demo\nDone: added retry");
     expect(signal.ops.at(-1)).toMatchObject({ op: "attach", filePath: "C:/tmp/x.patch" });
   });
 
@@ -92,7 +92,7 @@ describe("end-to-end notification flow", () => {
     await tick();
 
     const all = texts(signal);
-    expect(all.at(-1)).toBe("Failed: boom");
+    expect(all.at(-1)).toBe("Project: demo\nFailed: boom");
     expect(signal.ops.some((o) => o.op === "attach")).toBe(false);
   });
 });

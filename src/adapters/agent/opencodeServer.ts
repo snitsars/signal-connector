@@ -11,7 +11,7 @@
  * Auth is HTTP basic (OPENCODE_SERVER_USERNAME / OPENCODE_SERVER_PASSWORD).
  */
 import type { AgentPort, StartTaskInput } from "../../core/ports.js";
-import type { AgentEvent, PermissionDecision, Project } from "../../domain/types.js";
+import type { AgentEvent, ModelRef, PermissionDecision, Project } from "../../domain/types.js";
 import type { Logger } from "../../logging/logger.js";
 import { combineDiffs, writeDiffFile, type FileDiff } from "./diff.js";
 import { mapOpenCodeEvent } from "./eventMapper.js";
@@ -104,6 +104,11 @@ export class OpenCodeServerAdapter implements AgentPort {
     }
   }
 
+  /** Standalone adapters drive opencode directly, so nothing needs launching. */
+  isConnected(): boolean {
+    return true;
+  }
+
   async startTask(input: StartTaskInput): Promise<{ sessionId: string }> {
     const sessionId = input.sessionId ?? (await this.createSession(input.project)).id;
     this.taskSession.set(input.taskId, sessionId);
@@ -115,6 +120,15 @@ export class OpenCodeServerAdapter implements AgentPort {
   async newSession(project: Project): Promise<{ sessionId: string }> {
     const session = await this.createSession(project);
     return { sessionId: session.id };
+  }
+
+  /** Model selection needs a live opencode session; only plugin mode has one. */
+  async listModels(): Promise<ModelRef[]> {
+    throw new Error("model selection needs the plugin agent mode");
+  }
+
+  async setModel(): Promise<void> {
+    throw new Error("model selection needs the plugin agent mode");
   }
 
   private createSession(project: Project): Promise<SessionInfo> {

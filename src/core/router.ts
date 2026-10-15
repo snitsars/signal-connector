@@ -8,9 +8,37 @@ export type ParsedInput =
   | { kind: "approval"; decision: "once" | "always" | "reject" }
   | { kind: "prompt"; text: string };
 
+/** Words the operator can send to answer a permission prompt. */
+export const APPROVAL_DECISIONS: Record<string, "once" | "always" | "reject"> = {
+  approve: "once",
+  approved: "once",
+  allow: "once",
+  allowed: "once",
+  ok: "once",
+  yes: "once",
+  "approve once": "once",
+  "allow once": "once",
+  always: "always",
+  "approve always": "always",
+  "allow always": "always",
+  "always allow": "always",
+  "always approve": "always",
+  deny: "reject",
+  denied: "reject",
+  reject: "reject",
+  rejected: "reject",
+  no: "reject",
+  block: "reject",
+};
+
+const APPROVAL_PHRASES = new Set(Object.keys(APPROVAL_DECISIONS));
+
 export const KNOWN_COMMANDS = [
   "use",
+  "open",
   "task",
+  "models",
+  "model",
   "status",
   "approve",
   "deny",
@@ -24,6 +52,9 @@ export const HELP_TEXT = [
   "SignalConnector commands:",
   "/projects — list configured projects",
   "/use <project> — set the active project",
+  "/open <project> — open it in a new window and make it active",
+  "/models — list this project's models and pick one",
+  "/model <number|provider/id> — switch this session's model",
   "/task <prompt> — start a task in the active project",
   "/status — show the latest task state",
   "/new — fork a fresh session for the active project",
@@ -46,9 +77,9 @@ export function parseInput(text: string): ParsedInput {
       return { kind: "command", name, args };
     }
   }
-  const lower = trimmed.toLowerCase();
-  if (lower === "approve" || lower === "yes") return { kind: "approval", decision: "once" };
-  if (lower === "deny" || lower === "no") return { kind: "approval", decision: "reject" };
-  if (lower === "always") return { kind: "approval", decision: "always" };
+  const lower = trimmed.toLowerCase().replace(/[.!]+$/, "");
+  // Accept the wording clients use for approvals, not just the terse keywords:
+  // the dialog says "Approve once / Always allow / Reject".
+  if (APPROVAL_PHRASES.has(lower)) return { kind: "approval", decision: APPROVAL_DECISIONS[lower]! };
   return { kind: "prompt", text: trimmed };
 }

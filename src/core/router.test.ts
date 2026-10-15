@@ -16,6 +16,22 @@ describe("parseInput", () => {
     expect(parseInput("always")).toEqual({ kind: "approval", decision: "always" });
   });
 
+  it("accepts the wording clients use in the approval dialog", () => {
+    expect(parseInput("Allow")).toEqual({ kind: "approval", decision: "once" });
+    expect(parseInput("Allow once")).toEqual({ kind: "approval", decision: "once" });
+    expect(parseInput("Approve always")).toEqual({ kind: "approval", decision: "always" });
+    expect(parseInput("Always allow")).toEqual({ kind: "approval", decision: "always" });
+    expect(parseInput("always.")).toEqual({ kind: "approval", decision: "always" });
+    expect(parseInput("Reject")).toEqual({ kind: "approval", decision: "reject" });
+  });
+
+  it("keeps unrelated text a prompt", () => {
+    expect(parseInput("allow me to explain the plan")).toEqual({
+      kind: "prompt",
+      text: "allow me to explain the plan",
+    });
+  });
+
   it("treats other text as a prompt", () => {
     expect(parseInput("add a retry to the client")).toEqual({
       kind: "prompt",
