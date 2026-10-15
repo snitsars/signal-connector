@@ -34,7 +34,6 @@ export const APPROVAL_DECISIONS: Record<string, "once" | "always" | "reject"> = 
 const APPROVAL_PHRASES = new Set(Object.keys(APPROVAL_DECISIONS));
 
 export const KNOWN_COMMANDS = [
-  "use",
   "open",
   "task",
   "models",
@@ -50,18 +49,17 @@ export const KNOWN_COMMANDS = [
 
 export const HELP_TEXT = [
   "SignalConnector commands:",
-  "/projects — list configured projects",
-  "/use <project> — set the active project",
-  "/open <project> — open it in a new window and make it active",
-  "/models — list this project's models and pick one",
-  "/model <number|provider/id> — switch this session's model",
-  "/task <prompt> — start a task in the active project",
+  "/projects — list configured projects and which have their own group",
+  "/open <project> — give the project its own group and open its window",
+  "/task <prompt> — start a task (in a project's group, for that project)",
   "/status — show the latest task state",
-  "/new — fork a fresh session for the active project",
+  "/new — fork a fresh session for the project",
   "/stop — abort the running task",
   "/approve | /deny | /always — answer a permission prompt",
+  "/models — list this project's models and pick one",
+  "/model <number|provider/id> — switch this session's model",
   "/help — this message",
-  "Any other text is sent to the active project's session.",
+  "Each project talks in its own group; anything you send there is about that project.",
 ].join("\n");
 
 export function parseInput(text: string): ParsedInput {

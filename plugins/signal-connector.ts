@@ -41,21 +41,15 @@ function basename(dir: string): string {
 
 type BridgeEvent = Omit<AgentEvent, "taskId">;
 
-/** Longest assistant text forwarded as a status line. */
-const STATUS_TEXT_LIMIT = 200;
-
-/** Longest assistant text carried into the completion summary. */
-const SUMMARY_TEXT_LIMIT = 500;
-
 /**
  * The completion summary is the assistant's own last message, so the operator
  * gets the answer rather than "session idle". Falls back when a task produced no
- * text at all (tool-only work).
+ * text at all (tool-only work). The text is passed through whole — Signal carries
+ * it, and truncating answers was the operator's complaint.
  */
 export function summarizeIdle(fallback: string, lastText: string | undefined): string {
   const text = (lastText ?? "").trim();
-  if (!text) return fallback;
-  return text.length > SUMMARY_TEXT_LIMIT ? `${text.slice(0, SUMMARY_TEXT_LIMIT)}…` : text;
+  return text || fallback;
 }
 
 /**
@@ -163,7 +157,7 @@ export function extractOptions(text: string): { text: string; options: string[] 
 export function mapServerEvent(
   raw: unknown,
   at = Date.now(),
-): { sessionID: string; event: BridgeEvent; fullText?: string } | undefined {
+): { sessionID: string; event: BridgeEvent } | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
   const record = raw as Record<string, any>;
   const data = (record.data ?? record.properties ?? record) as Record<string, any>;
@@ -200,20 +194,13 @@ export function mapServerEvent(
         : undefined;
     case "session.text.ended": {
       if (!data.text) return undefined;
-      // Parse the markers before truncating, so a menu or a file at the end of a
-      // long message is still picked up.
+      // Markers (menus, files) are stripped from the text the operator reads.
       const withOptions = extractOptions(String(data.text));
       const withFiles = extractAttachments(withOptions.text);
-      const event: BridgeEvent = {
-        type: "status",
-        at,
-        text: withFiles.text.slice(0, STATUS_TEXT_LIMIT),
-      };
+      const event: BridgeEvent = { type: "status", at, text: withFiles.text };
       if (withOptions.options.length > 0) event.choices = withOptions.options;
       if (withFiles.paths.length > 0) event.attachPaths = withFiles.paths;
-      // The full text is kept for the completion summary — quiet mode sends one
-      // message per task, and that message should carry the answer.
-      return { sessionID, event, ...(withFiles.text ? { fullText: withFiles.text } : {}) };
+      return { sessionID, event };
     }
     default:
       return undefined;
@@ -415,7 +402,10 @@ async function setup(ctx: any): Promise<() => void> {
         if (!mapped) continue;
         const taskId = taskBySession.get(mapped.sessionID);
         if (!taskId) continue;
-        if (mapped.fullText) lastText.set(taskId, mapped.fullText);
+        // Keep the assistant's text for the completion summary.
+        if (mapped.event.type === "status" && mapped.event.text) {
+          lastText.set(taskId, mapped.event.text);
+        }
 
         let event = mapped.event;
         if (event.type === "idle" || event.type === "error") {

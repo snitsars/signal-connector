@@ -2,6 +2,7 @@
  * Core ports. The core talks to the outside world only through these interfaces.
  * Implementations live in src/adapters/**; core must not import them.
  */
+import type { StyleRange } from "./format.js";
 import type {
   AgentEvent,
   IncomingMessage,
@@ -13,13 +14,38 @@ import type {
   Reaction,
 } from "../domain/types.js";
 
+/** A message another one replies to (Signal's quote), used to thread by project. */
+export interface QuoteRef {
+  /** The quoted message's id (its Signal timestamp). */
+  id: string;
+  author?: string;
+  text?: string;
+}
+
+export interface SendOptions {
+  /** Send as a reply to this message. */
+  quote?: QuoteRef;
+  /** Styled ranges of the (already rendered) text. */
+  styles?: StyleRange[];
+}
+
 export interface SignalPort {
   /** Begin receiving. Resolves once the transport is ready. */
   start(): Promise<void>;
   stop(): Promise<void>;
-  send(channelId: string, text: string): Promise<OutgoingMessage>;
-  edit(channelId: string, messageId: string, text: string): Promise<void>;
-  attach(channelId: string, filePath: string, caption?: string): Promise<OutgoingMessage>;
+  send(channelId: string, text: string, options?: SendOptions): Promise<OutgoingMessage>;
+  edit(
+    channelId: string,
+    messageId: string,
+    text: string,
+    options?: SendOptions,
+  ): Promise<void>;
+  attach(
+    channelId: string,
+    filePath: string,
+    caption?: string,
+    quote?: QuoteRef,
+  ): Promise<OutgoingMessage>;
   /**
    * Send a Signal poll (2-10 options). Rejects when the transport cannot send
    * polls, so the core can fall back to a numbered text menu.
@@ -29,7 +55,13 @@ export interface SignalPort {
     question: string,
     options: string[],
     allowMultiple?: boolean,
+    quote?: QuoteRef,
   ): Promise<OutgoingMessage>;
+  /**
+   * Create a Signal group containing just the operator, for use as a project's
+   * own conversation. Returns the new group's id.
+   */
+  createGroup(name: string): Promise<{ groupId: string }>;
   onMessage(handler: (message: IncomingMessage) => void): void;
   onReaction(handler: (reaction: Reaction) => void): void;
   onPollVote(handler: (vote: PollVote) => void): void;

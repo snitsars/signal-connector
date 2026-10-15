@@ -36,6 +36,7 @@ async function main(): Promise<void> {
     endpoint: `http://${config.signal.daemonHost}:${config.signal.daemonPort}/api/v1/rpc`,
     account,
     channelId: config.channel.id ?? "self",
+    channelKind: config.channel.kind,
     mediaDir: path.join(dir, "media"),
     logger,
   });

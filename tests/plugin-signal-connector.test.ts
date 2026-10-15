@@ -50,20 +50,17 @@ describe("mapServerEvent", () => {
     });
   });
 
-  it("maps a finished text part to a status line and truncates it", () => {
+  it("maps a finished text part to a status line, whole", () => {
     const long = "x".repeat(500);
     const mapped = mapServerEvent(event("session.text.ended", { text: long }), 1);
-    expect(mapped?.event).toEqual({ type: "status", at: 1, text: "x".repeat(200) });
-    // The untruncated text is kept for the completion summary.
-    expect(mapped?.fullText).toBe(long);
+    expect(mapped?.event).toEqual({ type: "status", at: 1, text: long });
   });
 
-  it("keeps an option menu even when it sits past the truncation point", () => {
+  it("keeps an option menu that sits at the end of a long message", () => {
     const text = `${"x".repeat(400)}\n<<options: retry | revert>>`;
     const mapped = mapServerEvent(event("session.text.ended", { text }), 1);
-    expect(mapped?.event.text).toBe("x".repeat(200));
+    expect(mapped?.event.text).toBe("x".repeat(400));
     expect(mapped?.event.choices).toEqual(["retry", "revert"]);
-    expect(mapped?.fullText).toBe("x".repeat(400));
   });
 
   it("ignores events the bridge does not forward", () => {
@@ -204,8 +201,8 @@ describe("summarizeIdle", () => {
     expect(summarizeIdle("session idle", "   ")).toBe("session idle");
   });
 
-  it("caps a long answer", () => {
-    const summary = summarizeIdle("session idle", "y".repeat(900));
-    expect(summary).toBe(`${"y".repeat(500)}…`);
+  it("keeps the whole answer", () => {
+    const long = "y".repeat(900);
+    expect(summarizeIdle("session idle", long)).toBe(long);
   });
 });

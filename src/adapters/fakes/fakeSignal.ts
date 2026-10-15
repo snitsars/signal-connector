@@ -1,7 +1,7 @@
 /**
  * In-memory SignalPort fake for core tests. Records everything it sends.
  */
-import type { SignalPort } from "../../core/ports.js";
+import type { QuoteRef, SendOptions, SignalPort } from "../../core/ports.js"
 import type {
   IncomingMessage,
   OutgoingMessage,
@@ -14,6 +14,8 @@ export interface SentMessage {
   messageId: string;
   text: string;
   edited?: boolean;
+  /** Set when the message was sent as a reply (threading). */
+  quote?: QuoteRef;
 }
 
 export type SignalOp =
@@ -37,14 +39,14 @@ export class FakeSignal implements SignalPort {
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
 
-  async send(channelId: string, text: string): Promise<OutgoingMessage> {
+  async send(channelId: string, text: string, options?: SendOptions): Promise<OutgoingMessage> {
     const messageId = `msg-${++this.seq}`;
-    this.sent.push({ channelId, messageId, text });
+    this.sent.push({ channelId, messageId, text, ...(options?.quote ? { quote: options.quote } : {}) });
     this.ops.push({ op: "send", messageId, text });
     return { messageId };
   }
 
-  async edit(channelId: string, messageId: string, text: string): Promise<void> {
+  async edit(channelId: string, messageId: string, text: string, options?: SendOptions): Promise<void> {
     const existing = this.sent.find((m) => m.messageId === messageId);
     if (existing) {
       existing.text = text;
@@ -55,17 +57,32 @@ export class FakeSignal implements SignalPort {
     this.ops.push({ op: "edit", messageId, text });
   }
 
-  async attach(channelId: string, filePath: string, caption?: string): Promise<OutgoingMessage> {
+  async attach(
+    channelId: string,
+    filePath: string,
+    caption?: string,
+    quote?: QuoteRef,
+  ): Promise<OutgoingMessage> {
     const messageId = `att-${++this.seq}`;
     this.attachments.push({ channelId, filePath, caption });
     this.ops.push({ op: "attach", filePath, ...(caption ? { caption } : {}) });
     return { messageId };
   }
 
+  /** Test helper: groups this fake created. */
+  readonly createdGroups: string[] = [];
+
+  async createGroup(name: string): Promise<{ groupId: string }> {
+    this.createdGroups.push(name);
+    return { groupId: `group-${this.createdGroups.length}-${name.toLowerCase().replace(/\W+/g, "-")}` };
+  }
+
   async sendPoll(
     channelId: string,
     question: string,
     options: string[],
+    _allowMultiple = false,
+    _quote?: QuoteRef,
   ): Promise<OutgoingMessage> {
     if (this.failPolls) throw new Error("polls are not supported here");
     const messageId = `poll-${++this.seq}`;

@@ -6,7 +6,8 @@
  * be confirmed on the host (see ticket 2.2). This client is written to the
  * documented v0.14 surface and fails loudly when the daemon disagrees.
  */
-import type { SignalPort } from "../../core/ports.js";
+import { styleParam, type StyleRange } from "../../core/format.js";
+import type { QuoteRef, SendOptions, SignalPort } from "../../core/ports.js"
 import type { IncomingMessage, OutgoingMessage, PollVote, Reaction } from "../../domain/types.js";
 import type { Logger } from "../../logging/logger.js";
 import { RateLimiter } from "./rateLimiter.js";
@@ -24,6 +25,8 @@ interface RpcResponse<T> {
 interface SentMessage {
   destination?: string;
   destinationNumber?: string;
+  /** Set when the synced message was sent to a group rather than a person. */
+  groupInfo?: { groupId?: string };
   message?: string;
   timestamp?: number;
   reaction?: { emoji?: string; targetSentTimestamp?: number };
@@ -144,12 +147,49 @@ export interface SignalCliOptions {
   account: string;
   /** Restrict to this channel id (own number for note-to-self, or a group id). */
   channelId: string;
+  /** "group" makes the client address the channel by group id instead of recipient. */
+  channelKind?: "note-to-self" | "group";
   /** Where inbound attachments are written. Defaults to the OS temp dir. */
   mediaDir?: string;
   pollIntervalMs?: number;
   minIntervalMs?: number;
   maxPerMinute?: number;
   logger: Logger;
+}
+
+/** Signal group ids are base64 and end with '='; phone numbers do not. */
+export function isGroupId(value: string): boolean {
+  return /^[A-Za-z0-9+/]+=*$/.test(value) && value.includes("=");
+}
+
+/**
+ * How signal-cli should address a channel: `groupId` for groups, `recipient`
+ * for a person (or ourselves, for Note-to-Self — a group id would be sent as a
+ * recipient otherwise, which the daemon rejects).
+ */
+export function targetParams(
+  channelId: string,
+  account: string,
+  kind?: "note-to-self" | "group",
+): Record<string, string> {
+  if (channelId === "self" || channelId === account) return { recipient: account };
+  if (kind === "group" || isGroupId(channelId)) return { groupId: channelId };
+  return { recipient: channelId };
+}
+
+/** Quote parameters that make a message render as a reply to another one. */
+export function quoteParams(
+  quote: { id: string; author?: string; text?: string } | undefined,
+  account: string,
+): Record<string, unknown> {
+  if (!quote) return {};
+  const timestamp = Number(quote.id);
+  if (!Number.isFinite(timestamp)) return {};
+  return {
+    quoteTimestamp: timestamp,
+    quoteAuthor: quote.author ?? account,
+    ...(quote.text ? { quoteMessage: quote.text.slice(0, 200) } : {}),
+  };
 }
 
 export class SignalCliClient implements SignalPort {
@@ -299,15 +339,17 @@ export class SignalCliClient implements SignalPort {
       return;
     }
 
-    // Note-to-Self messages sent from the linked phone arrive as a sync message.
+    // Messages the operator sends from the linked phone arrive as a sync message:
+    // Note-to-Self addressed to us, or a group send addressed to the group.
     const sent = env.syncMessage?.sentMessage;
     if (sent) {
+      const groupId = sent.groupInfo?.groupId;
       const destination = sent.destinationNumber ?? sent.destination ?? "";
-      if (destination !== this.opts.account) return;
+      if (!groupId && destination !== this.opts.account) return;
       // Ignore the sync echo of our own outgoing messages (prevents a loop).
       if (this.sentTimestamps.has(String(sent.timestamp ?? env.timestamp ?? ""))) return;
       const at = sent.timestamp ?? env.timestamp ?? Date.now();
-      const channelId = this.opts.account;
+      const channelId = groupId ?? this.opts.account;
       if (sent.pollVote) {
         const vote = pollVoteFrom(sent.pollVote, channelId, at);
         if (vote) this.emitPollVote(vote);
@@ -351,23 +393,41 @@ export class SignalCliClient implements SignalPort {
     return channelId === this.opts.channelId;
   }
 
-  async send(channelId: string, text: string): Promise<OutgoingMessage> {
+  async send(channelId: string, text: string, options?: SendOptions): Promise<OutgoingMessage> {
     await this.limiter.acquire();
     this.opts.logger.debug("signal send", { text });
     const result = await this.rpc<{ timestamp?: number }>("send", {
-      recipient: this.recipientFor(channelId),
+      ...this.targetFor(channelId),
       message: text,
+      ...this.quotesFor(options?.quote),
+      ...this.stylesFor(options?.styles),
     });
     this.rememberSent(result.timestamp);
     return { messageId: String(result.timestamp ?? Date.now()) };
   }
 
-  async edit(channelId: string, messageId: string, text: string): Promise<void> {
+  /** Create a private group (only this account) to serve as a project's room. */
+  async createGroup(name: string): Promise<{ groupId: string }> {
+    await this.limiter.acquire();
+    const result = await this.rpc<{ groupId?: string }>("updateGroup", { name });
+    const groupId = result.groupId;
+    if (!groupId) throw new Error("signal-cli did not return a group id");
+    return { groupId };
+  }
+
+  async edit(
+    channelId: string,
+    messageId: string,
+    text: string,
+    options?: SendOptions,
+  ): Promise<void> {
     await this.limiter.acquire();
     await this.rpc("send", {
-      recipient: this.recipientFor(channelId),
+      ...this.targetFor(channelId),
       message: text,
       editTimestamp: Number(messageId),
+      ...this.quotesFor(options?.quote),
+      ...this.stylesFor(options?.styles),
     });
   }
 
@@ -380,24 +440,31 @@ export class SignalCliClient implements SignalPort {
     question: string,
     options: string[],
     allowMultiple = false,
+    quote?: QuoteRef,
   ): Promise<OutgoingMessage> {
     if (options.length < 2 || options.length > 10) {
       throw new Error(`a poll needs 2-10 options, got ${options.length}`);
     }
     await this.limiter.acquire();
     const result = await this.rpc<{ timestamp?: number }>("sendPollCreate", {
-      recipient: this.recipientFor(channelId),
+      ...this.targetFor(channelId),
       question,
       option: options,
       ...(allowMultiple ? {} : { noMulti: true }),
+      ...this.quotesFor(quote),
     });
     this.rememberSent(result.timestamp);
     return { messageId: String(result.timestamp ?? Date.now()) };
   }
 
-  async attach(channelId: string, filePath: string, caption?: string): Promise<OutgoingMessage> {    await this.limiter.acquire();
+  async attach(
+    channelId: string,
+    filePath: string,
+    caption?: string,
+    quote?: QuoteRef,
+  ): Promise<OutgoingMessage> {    await this.limiter.acquire();
     const result = await this.rpc<{ timestamp?: number }>("send", {
-      recipient: this.recipientFor(channelId),
+      ...this.targetFor(channelId),
       message: caption ?? "",
       attachment: [filePath],
     });
@@ -405,9 +472,18 @@ export class SignalCliClient implements SignalPort {
     return { messageId: String(result.timestamp ?? Date.now()) };
   }
 
-  private recipientFor(channelId: string): string {
-    if (channelId === "self" || channelId === this.opts.account) return this.opts.account;
-    return channelId;
+  private targetFor(channelId: string): Record<string, string> {
+    return targetParams(channelId, this.opts.account, this.opts.channelKind);
+  }
+
+  private quotesFor(quote?: QuoteRef): Record<string, unknown> {
+    return quoteParams(quote, this.opts.account);
+  }
+
+  /** Styled ranges, as signal-cli's start:length:STYLE strings. */
+  private stylesFor(styles?: StyleRange[]): Record<string, unknown> {
+    if (!styles || styles.length === 0) return {};
+    return { textStyle: styles.map(styleParam) };
   }
 
   private rememberSent(timestamp: number | undefined): void {

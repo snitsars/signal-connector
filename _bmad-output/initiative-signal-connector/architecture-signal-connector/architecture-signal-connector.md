@@ -48,7 +48,8 @@ in-memory state that is not reconstructable from the DB after restart.
 ### AD-4 — Signal transport is signal-cli JSON-RPC over a managed daemon
 **Binds**: the Signal boundary. **Prevents**: divergent transport assumptions.
 **Rule**: the service owns/spawns `signal-cli daemon --http` and talks JSON-RPC. No direct
-libsignal, no signald. Channel is restricted to one configured identifier.
+libsignal, no signald. One **control channel** is configured; a project may additionally get its own
+group channel, created on demand and recorded in the store (AD-3) so it is reused.
 
 ### AD-5 — Agent boundary is `AgentAdapter`; opencode is the first adapter
 **Binds**: the agent boundary. **Prevents**: per-agent branching leaking into the core.
@@ -99,6 +100,5 @@ None (top-level initiative).
 ## Deferred
 
 - Windows Service + Tauri tray packaging (later stage).
-- Dedicated bot-number/group channel (channel layer allows it).
 - Additional agent adapters (Claude Code, Codex).
 - Stage 2 free-form steering semantics beyond a single follow-up prompt.

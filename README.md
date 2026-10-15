@@ -15,7 +15,7 @@ account. Planning artifacts live in `_bmad-output/initiative-signal-connector/`.
 ```bash
 npm install
 npm run dry -- --demo      # scripted walkthrough: task -> permission -> done + diff
-npm run dry                # interactive: type /use demo, /task ..., approve
+npm run dry                # interactive: type /open demo, /task ..., approve
 ```
 
 The dry run uses an in-memory store and console/scripted ports — no Signal or opencode needed.
@@ -68,13 +68,33 @@ pwsh scripts/start-all.ps1 -Projects C:\Sources\appA, C:\Sources\appB
 Each project registers and the service sends a Signal greeting you can **reply to**:
 
 ```
-Project "appA" connected. Reply to this message to address it, or use /use appA.
+Project "appA" connected. Everything here is about this project.
 ```
 
 **Addressing a project:**
-- `/use <project>` then send commands, or
+- `/open <project>` to give it its own group and window, then send commands there, or
 - **reply (quote) any message that belongs to a project** — the service routes that reply to the
   same project automatically (it tracks which project each outgoing message came from).
+
+### Channels: one control group, one group per project
+
+The configured `[channel]` is the **control group**: general commands (`/projects`, `/help`, `/open`) happen there. There is no `/use` — routing is by channel, so no sticky active project.
+
+`/open <project>` gives the project **its own group** — created on first use,
+containing only the operator, so nothing is shared with anyone else — and from then on that project's
+output, approvals and menus live in that group. Messages sent *in* a project's group are about that
+project, whatever the control group's active project is. Each project's group is recorded in the
+store (`project_channels`), so it is reused rather than recreated.
+
+Replies are threaded by quoting the project's greeting, which is also what a quoted reply is routed
+by. With one group per project this is mostly cosmetic; it still helps if you keep everything in one
+channel instead.
+
+```toml
+[channel]
+kind = "group"
+id = "7UHdP8CJ7S+cOc3Qx9RPrVRR8OyaFYfvXWjT1G8SfOI="   # the control group
+```
 
 **Working in one session:** by default each `/task` creates a fresh opencode session. To send
 commands into a session you already have open, pin the project to it:
@@ -211,7 +231,7 @@ Then, in Signal Note-to-Self:
 
 ```
 /projects
-/use myproject
+/open myproject
 /task add a retry to the HTTP client
 approve        # when a permission prompt appears
 ```
@@ -221,8 +241,7 @@ approve        # when a permission prompt appears
 | Command | Effect |
 |---|---|
 | `/projects` | list configured projects |
-| `/use <project>` | set the active project (starts it if a `launch` is configured and nothing is connected) |
-| `/open <project>` | always open the project in a new window and make it active |
+| `/open <project>` | give the project its own group, open its window, start following it |
 | `/models` | list this project's models and pick one (tap the poll or reply with a number) |
 | `/model <provider/id>` | switch the session's model directly |
 | `/task <prompt>` | start a task in the active project |

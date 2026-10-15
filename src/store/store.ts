@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS approvals (
   decision TEXT NOT NULL,
   PRIMARY KEY (project_id, tool)
 );
+CREATE TABLE IF NOT EXISTS project_channels (
+  project_id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  name TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
@@ -46,6 +51,11 @@ export interface Store {
 
   setSession(projectId: string, sessionId: string): void;
   getSession(projectId: string): string | undefined;
+
+  /** The Signal channel (group) a project talks in, once it has one. */
+  setChannel(projectId: string, channelId: string, name: string): void;
+  getChannel(projectId: string): { channelId: string; name: string } | undefined;
+  projectForChannel(channelId: string): string | undefined;
 
   createTask(task: Task): void;
   updateTask(id: string, patch: Partial<Pick<Task, "state" | "summary" | "error" | "updatedAt">>): void;
@@ -111,6 +121,25 @@ export function openStore(path: string): Store {
     getSession(projectId) {
       const row = db.prepare(`SELECT session_id FROM sessions WHERE project_id = ?`).get(projectId);
       return row ? String(row.session_id) : undefined;
+    },
+
+    setChannel(projectId, channelId, name) {
+      db.prepare(
+        `INSERT INTO project_channels (project_id, channel_id, name) VALUES (?, ?, ?)
+         ON CONFLICT(project_id) DO UPDATE SET channel_id = excluded.channel_id, name = excluded.name`,
+      ).run(projectId, channelId, name);
+    },
+    getChannel(projectId) {
+      const row = db
+        .prepare(`SELECT channel_id, name FROM project_channels WHERE project_id = ?`)
+        .get(projectId);
+      return row ? { channelId: String(row.channel_id), name: String(row.name) } : undefined;
+    },
+    projectForChannel(channelId) {
+      const row = db
+        .prepare(`SELECT project_id FROM project_channels WHERE channel_id = ?`)
+        .get(channelId);
+      return row ? String(row.project_id) : undefined;
     },
 
     createTask(task) {

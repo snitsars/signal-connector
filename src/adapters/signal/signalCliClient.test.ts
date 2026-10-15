@@ -1,5 +1,45 @@
 import { describe, expect, it } from "vitest";
 import { attachmentData, inboundMedia, mediaFileName, pollVoteFrom } from "./signalCliClient.js";
+import { isGroupId, quoteParams, targetParams } from "./signalCliClient.js";
+
+describe("targetParams", () => {
+  const account = "+1000";
+  const group = "Pmpi+EfPWmsxiomLe9Nx2XF9HOE483p6iKiFj65iMwI=";
+
+  it("addresses Note-to-Self as ourselves", () => {
+    expect(targetParams("self", account, "note-to-self")).toEqual({ recipient: account });
+    expect(targetParams(account, account, "note-to-self")).toEqual({ recipient: account });
+  });
+
+  it("addresses a group by groupId, not recipient", () => {
+    expect(targetParams(group, account, "group")).toEqual({ groupId: group });
+  });
+
+  it("recognises a group id even when the kind is not configured", () => {
+    expect(isGroupId(group)).toBe(true);
+    expect(isGroupId(account)).toBe(false);
+    expect(targetParams(group, account)).toEqual({ groupId: group });
+  });
+
+  it("addresses a person by recipient", () => {
+    expect(targetParams("+2000", account, "note-to-self")).toEqual({ recipient: "+2000" });
+  });
+});
+
+describe("quoteParams", () => {
+  it("turns a quote into signal-cli's parameters", () => {
+    expect(quoteParams({ id: "1792000000000", text: 'Project "demo"' }, "+1000")).toEqual({
+      quoteTimestamp: 1792000000000,
+      quoteAuthor: "+1000",
+      quoteMessage: 'Project "demo"',
+    });
+  });
+
+  it("ignores a quote without a usable id", () => {
+    expect(quoteParams(undefined, "+1000")).toEqual({});
+    expect(quoteParams({ id: "not-a-timestamp" }, "+1000")).toEqual({});
+  });
+});
 
 describe("inboundMedia", () => {
   const ref = { id: "abc123", contentType: "image/jpeg", filename: "photo.jpg", size: 1234 };

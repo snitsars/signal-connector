@@ -18,7 +18,8 @@ import type {
   Reaction,
   Task,
 } from "../domain/types.js";
-import type { AgentPort, LauncherPort, SignalPort } from "./ports.js";
+import type { AgentPort, LauncherPort, QuoteRef, SignalPort } from "./ports.js";
+import { renderStyled } from "./format.js";
 import { HELP_TEXT, KNOWN_COMMANDS, parseInput } from "./router.js";
 import {
   choicesText,
@@ -74,6 +75,10 @@ export class CoreApp {
   private readonly launcher: LauncherPort | undefined;
   private readonly now: () => number;
   private controlChannel = "self";
+  /** The project this message is about (its channel, or the quoted project). */
+  private currentProjectId: string | undefined;
+  /** Channel the message being handled came from; replies go back there. */
+  private conversation = "self";
   /** Serializes handler dispatch so events are processed in arrival order. */
   private chain: Promise<void> = Promise.resolve();
 
@@ -96,6 +101,7 @@ export class CoreApp {
       if (p.session) this.store.setSession(id, p.session);
     }
     this.controlChannel = this.config.channel.id ?? this.config.signal.account ?? "self";
+    this.conversation = this.controlChannel;
 
     this.signal.onMessage((m) => this.enqueue(() => this.handleMessage(m)));
     this.signal.onReaction((r) => this.enqueue(() => this.handleReaction(r)));
@@ -115,25 +121,25 @@ export class CoreApp {
   // --- incoming ------------------------------------------------------------
 
   private async handleMessage(msg: IncomingMessage): Promise<void> {
-    if (!msg.inControlChannel) return;
-    this.controlChannel = msg.channelId;
-    this.logger.debug("control message", { text: msg.text });
-    const parsed = parseInput(msg.text);
+    // Messages are accepted in the control channel (general commands) and in a
+    // project's own channel (commands about that project). The project is derived
+    // from the channel, or from the message this one quotes.
+    const quotedProject = msg.quoteId
+      ? this.store.getValue(`msgProject:${msg.quoteId}`)
+      : undefined;
+    const projectId = this.store.projectForChannel(msg.channelId) ?? quotedProject;
+    if (!msg.inControlChannel && !projectId) return;
+    this.conversation = msg.channelId;
+    this.currentProjectId = projectId;
+    this.logger.debug("control message", { text: msg.text, project: projectId });
 
-    // A reply/quote to a project's message routes to that project.
-    if (msg.quoteId) {
-      const quotedProject = this.store.getValue(`msgProject:${msg.quoteId}`);
-      if (quotedProject) {
-        this.store.setValue(`activeProject:${this.controlChannel}`, quotedProject);
-        this.logger.debug("routed by quote", { projectId: quotedProject });
-      }
-    }
+    const parsed = parseInput(msg.text);
 
     if (parsed.kind === "approval") {
       if (this.pending().length > 0) {
         await this.resolveApproval(parsed.decision);
       } else {
-        await this.signal.send(this.controlChannel, "No pending approval.");
+        await this.reply("No pending approval.");
       }
       return;
     }
@@ -147,8 +153,7 @@ export class CoreApp {
     // While an approval is pending the agent is blocked, so don't swallow the
     // message as a task — say what the expected words are.
     if (this.pending().length > 0) {
-      await this.signal.send(
-        this.controlChannel,
+      await this.reply(
         `${this.pending().length} approval(s) waiting. Reply approve, deny or always (or react 👍 / 👎).`,
       );
       return;
@@ -171,12 +176,12 @@ export class CoreApp {
 
   private async dispatchCommand(name: string, args: string): Promise<void> {
     if (!KNOWN_COMMANDS.includes(name as (typeof KNOWN_COMMANDS)[number])) {
-      await this.signal.send(this.controlChannel, `Unknown command /${name}.\n\n${HELP_TEXT}`);
+      await this.reply(`Unknown command /${name}.\n\n${HELP_TEXT}`);
       return;
     }
     switch (name) {
       case "help":
-        await this.signal.send(this.controlChannel, HELP_TEXT);
+        await this.reply(HELP_TEXT);
         return;
       case "projects": {
         const projects = this.store.listProjects();
@@ -189,12 +194,9 @@ export class CoreApp {
                     `- ${p.name} (${p.path})${this.agent.isConnected(p.id) ? " [connected]" : ""}`,
                 )
                 .join("\n");
-        await this.signal.send(this.controlChannel, text);
+        await this.reply(text);
         return;
       }
-      case "use":
-        await this.useProject(args);
-        return;
       case "open":
         await this.openProject(args);
         return;
@@ -217,55 +219,89 @@ export class CoreApp {
         await this.stopTask();
         return;
       default:
-        await this.signal.send(this.controlChannel, HELP_TEXT);
+        await this.reply(HELP_TEXT);
     }
   }
 
   // --- commands ------------------------------------------------------------
 
+  /**
+   * The project this conversation is about: the one owning the channel, or the
+   * one a quoted message belongs to. There is no sticky "active project".
+   */
   private activeProject(): Project | undefined {
-    const id = this.store.getValue(`activeProject:${this.controlChannel}`);
-    return id ? this.store.getProject(id) : undefined;
-  }
-
-  private async useProject(name: string): Promise<void> {
-    if (!name) {
-      await this.signal.send(this.controlChannel, "Usage: /use <project>");
-      return;
-    }
-    const project = this.store.getProject(name);
-    if (!project) {
-      await this.signal.send(this.controlChannel, `Unknown project "${name}". Try /projects.`);
-      return;
-    }
-    this.store.setValue(`activeProject:${this.controlChannel}`, project.id);
-    const note = await this.startProjectWindow(project);
-    await this.signal.send(
-      this.controlChannel,
-      `Active project: ${project.name}${note ? ` — ${note}` : ""}`,
-    );
+    return this.currentProjectId ? this.store.getProject(this.currentProjectId) : undefined;
   }
 
   /**
-   * `/open` is the same thing as `/use` here: switching projects should also put
-   * the project's window in front, which is what the launcher does (it reuses the
-   * workspace that already hosts the project's agent).
+   * The channel a project's output belongs in: its own group once it has one,
+   * otherwise the channel the current conversation is happening in.
+   */
+  private channelFor(projectId: string): string {
+    return this.store.getChannel(projectId)?.channelId ?? this.conversation;
+  }
+
+  /**
+   * Give a project its own Signal group, reusing the one it already has. The
+   * group contains only the operator, so nothing is shared with anyone else.
+   */
+  private async ensureProjectRoom(project: Project): Promise<string | undefined> {
+    const existing = this.store.getChannel(project.id);
+    if (existing) return `group "${existing.name}"`;
+    try {
+      const { groupId } = await this.signal.createGroup(project.name);
+      this.store.setChannel(project.id, groupId, project.name);
+      this.logger.info("created project group", { project: project.name, channel: groupId });
+      // Introduce the group itself, once.
+      this.store.setValue(`greeted:${project.id}`, "1");
+      await this.sendProject(
+        project.id,
+        `**${project.name}** — this group is for this project.\nSend a task here; progress, approvals and results stay here.`,
+        false,
+      );
+      return `group "${project.name}" created — switch to it`;
+    } catch (err: unknown) {
+      this.logger.error("could not create project group", {
+        project: project.name,
+        error: String(err),
+      });
+      return `could not create its group: ${String(err)}`;
+    }
+  }
+
+  /**
+   * `/open <project>`: give the project its own group if it has none, bring its
+   * window forward, and tell the operator where its conversation now lives.
+   * There is no `/use` — routing is by channel, not by sticky state.
    */
   private async openProject(name: string): Promise<void> {
+    await this.activateProject(name, true);
+  }
+
+  /**
+   * Open a project: its own group (created on first use), its window in front.
+   * Everything the project sends afterwards goes to that group.
+   */
+  private async activateProject(name: string, opened: boolean): Promise<void> {
     if (!name) {
-      await this.signal.send(this.controlChannel, "Usage: /open <project>");
+      await this.reply("Usage: /open <project>");
       return;
     }
     const project = this.store.getProject(name);
     if (!project) {
-      await this.signal.send(this.controlChannel, `Unknown project "${name}". Try /projects.`);
+      await this.reply(`Unknown project "${name}". Try /projects.`);
       return;
     }
-    this.store.setValue(`activeProject:${this.controlChannel}`, project.id);
-    const note = await this.startProjectWindow(project);
-    await this.signal.send(
-      this.controlChannel,
-      `Active project: ${project.name} — ${note ?? "no launch command configured"}`,
+
+    const notes: string[] = [];
+    const room = await this.ensureProjectRoom(project);
+    if (room) notes.push(room);
+    const window = await this.startProjectWindow(project);
+    if (window) notes.push(window);
+    else if (opened) notes.push("no launch command configured");
+
+    await this.reply(
+      `**Opened ${project.name}**${notes.length > 0 ? ` · ${notes.join(" · ")}` : ""}`,
     );
   }
 
@@ -301,12 +337,12 @@ export class CoreApp {
 
   private async startTask(prompt: string): Promise<void> {
     if (!prompt) {
-      await this.signal.send(this.controlChannel, "Usage: /task <prompt>");
+      await this.reply("Usage: /task <prompt>");
       return;
     }
     const project = this.activeProject();
     if (!project) {
-      await this.signal.send(this.controlChannel, "No active project. Use /use <project> first.");
+      await this.reply("No project here. Send /open <project> in the control group.");
       return;
     }
     await this.runTask(project, prompt);
@@ -344,23 +380,24 @@ export class CoreApp {
   private async showModels(): Promise<void> {
     const project = this.activeProject();
     if (!project) {
-      await this.signal.send(this.controlChannel, "No active project. Use /use <project> first.");
+      await this.reply("No project here. Send /open <project> in the control group.");
       return;
     }
     let models: ModelRef[];
     try {
       models = await this.agent.listModels(project);
     } catch (err: unknown) {
-      await this.signal.send(this.controlChannel, `Could not read the model list: ${String(err)}`);
+      await this.reply(`Could not read the model list: ${String(err)}`);
       return;
     }
     if (models.length === 0) {
-      await this.signal.send(this.controlChannel, `${project.name} reported no models.`);
+      await this.reply(`${project.name} reported no models.`);
       return;
     }
 
     const options = models.map((model) => model.name ?? `${model.providerID}/${model.id}`);
-    const list = this.choices();
+    const channel = this.channelFor(project.id);
+    const list = this.choices(channel);
     const number = list.length + 1;
     const sent = await this.askChoices(project.id, options, `Model for ${project.name}`);
     list.push({
@@ -373,14 +410,14 @@ export class CoreApp {
       action: "model",
       values: models.map((model) => `${model.providerID}/${model.id}`),
     });
-    this.setChoices(list);
+    this.setChoices(list, channel);
   }
 
   /** `/model <number>` picks from the last listing; `/model provider/id` is direct. */
   private async selectModel(arg: string): Promise<void> {
     const project = this.activeProject();
     if (!project) {
-      await this.signal.send(this.controlChannel, "No active project. Use /use <project> first.");
+      await this.reply("No project here. Send /open <project> in the control group.");
       return;
     }
     const trimmed = arg.trim();
@@ -397,8 +434,7 @@ export class CoreApp {
 
     const slash = trimmed.indexOf("/");
     if (slash <= 0 || slash === trimmed.length - 1) {
-      await this.signal.send(
-        this.controlChannel,
+      await this.reply(
         "Usage: /model <number> after /models, or /model <provider>/<id>.",
       );
       return;
@@ -413,25 +449,25 @@ export class CoreApp {
     const sessionId = this.store.getSession(project.id) ?? "";
     try {
       await this.agent.setModel({ project, sessionId, model });
-      await this.sendProject(project.id, `Model: ${model.providerID}/${model.id}`);
+      await this.sendProject(project.id, `**Model** · \`${model.providerID}/${model.id}\``);
     } catch (err: unknown) {
       this.logger.error("model switch failed", { project: project.name, error: String(err) });
-      await this.signal.send(this.controlChannel, `Could not switch the model: ${String(err)}`);
+      await this.reply(`Could not switch the model: ${String(err)}`);
     }
   }
 
   private async showStatus(): Promise<void> {
     const project = this.activeProject();
     if (!project) {
-      await this.signal.send(this.controlChannel, "No active project.");
+      await this.reply("No project here.");
       return;
     }
     const task = this.store.getActiveTask(project.id) ?? this.latestTask(project.id);
     if (!task) {
-      await this.signal.send(this.controlChannel, `No tasks for ${project.name} yet.`);
+      await this.reply(`No tasks for ${project.name} yet.`);
       return;
     }
-    await this.signal.send(this.controlChannel, statusLine(task, task.summary));
+    await this.reply(statusLine(task, task.summary));
   }
 
   private latestTask(projectId: string): Task | undefined {
@@ -442,28 +478,28 @@ export class CoreApp {
   private async forkSession(): Promise<void> {
     const project = this.activeProject();
     if (!project) {
-      await this.signal.send(this.controlChannel, "No active project.");
+      await this.reply("No project here.");
       return;
     }
     const { sessionId } = await this.agent.newSession(project);
     this.store.setSession(project.id, sessionId);
-    await this.signal.send(this.controlChannel, `New session for ${project.name}.`);
+    await this.reply(`New session for ${project.name}.`);
   }
 
   private async stopTask(): Promise<void> {
     const project = this.activeProject();
     if (!project) {
-      await this.signal.send(this.controlChannel, "No active project.");
+      await this.reply("No project here.");
       return;
     }
     const task = this.store.getActiveTask(project.id);
     if (!task) {
-      await this.signal.send(this.controlChannel, "No running task.");
+      await this.reply("No running task.");
       return;
     }
     await this.agent.abort(task.id);
     this.store.updateTask(task.id, { state: "aborted", updatedAt: this.now() });
-    await this.signal.send(this.controlChannel, `Aborted task ${task.id}.`);
+    await this.reply(`Aborted task ${task.id}.`);
   }
 
   // --- agent events --------------------------------------------------------
@@ -493,7 +529,7 @@ export class CoreApp {
       await this.editStatus(done, event.summary);
       await this.sendProject(done.projectId, summaryText(done));
       if (event.diffPath) {
-        await this.signal.attach(this.controlChannel, event.diffPath, "diff");
+        await this.signal.attach(this.channelFor(task.projectId), event.diffPath, "diff");
       }
       return;
     }
@@ -518,17 +554,17 @@ export class CoreApp {
     // Files the agent asked to send (opencode -> operator).
     for (const path of event.attachPaths ?? []) {
       try {
-        await this.signal.attach(this.controlChannel, path, "from opencode");
+        await this.signal.attach(this.channelFor(task.projectId), path, "from opencode");
       } catch (err: unknown) {
         this.logger.warn("could not attach file", { path, error: String(err) });
-        await this.signal.send(this.controlChannel, `Could not send ${path}: ${String(err)}`);
+        await this.reply(`Could not send ${path}: ${String(err)}`);
       }
     }
 
     // A notice is something to tell the operator but not to act on (opencode's
     // questions can only be answered in its own window).
     if (event.type === "notice" && event.text) {
-      await this.sendProject(task.projectId, event.text);
+      await this.sendProject(task.projectId, `⚠️ ${event.text}`);
     }
 
     this.store.updateTask(task.id, { state: "running", updatedAt: this.now() });
@@ -537,30 +573,44 @@ export class CoreApp {
 
   private async editStatus(task: Task, detail?: string): Promise<void> {
     const messageId = this.store.getValue(`statusMsg:${task.id}`);
-    const text = statusLine(task, detail);
+    const ownGroup = this.store.getChannel(task.projectId) !== undefined;
+    const { text, styles } = renderStyled(statusLine(task, detail));
     if (messageId) {
-      await this.signal.edit(this.controlChannel, messageId, text);
+      await this.signal.edit(this.channelFor(task.projectId), messageId, text, { styles });
     } else {
       const sent = await this.sendProject(task.projectId, text);
       this.store.setValue(`statusMsg:${task.id}`, sent.messageId);
     }
   }
 
-  /** Send a project-scoped message and remember which project it belongs to (quote routing). */
+  /** Operator-facing message: markup is rendered into Signal's text styles. */
+  private async reply(markup: string): Promise<OutgoingMessage> {
+    const { text, styles } = renderStyled(markup);
+    return await this.signal.send(this.conversation, text, { styles });
+  }
+
+  /**
+   * Send a project-scoped message. Inside the project's own group it needs no
+   * label and no quote — the group is the context, and stacked quotes were the
+   * main reason the conversation was hard to read. In a shared channel both are
+   * added, so you can still tell which project spoke and reply to route.
+   */
   private async sendProject(
     projectId: string,
-    text: string,
+    markup: string,
     labeled = true,
   ): Promise<OutgoingMessage> {
-    const body = labeled ? `${this.projectLabel(projectId)}\n${text}` : text;
-    const sent = await this.signal.send(this.controlChannel, body);
+    const ownGroup = this.store.getChannel(projectId) !== undefined;
+    const body = labeled && !ownGroup ? `${this.projectLabel(projectId)}\n${markup}` : markup;
+    const { text, styles } = renderStyled(body);
+    const sent = await this.signal.send(this.channelFor(projectId), text, { styles });
     this.store.setValue(`msgProject:${sent.messageId}`, projectId);
     return sent;
   }
 
   /** Header marking which project a message came from, e.g. `Project: appA`. */
   private projectLabel(projectId: string): string {
-    return `Project: ${this.store.getProject(projectId)?.name ?? projectId}`;
+    return `**Project: ${this.store.getProject(projectId)?.name ?? projectId}**`;
   }
 
   /** Called when a project's plugin connects: register it, then greet and tag the message. */
@@ -569,32 +619,41 @@ export class CoreApp {
     await this.notifyProjectConnected(project.id);
   }
 
+  /**
+   * Introduce a project, once ever. A project with its own group is already
+   * introduced by that group, and reconnects (every service restart) must not
+   * re-announce anything — that produced a wall of identical greetings.
+   */
   async notifyProjectConnected(projectId: string): Promise<void> {
-    const project = this.store.getProject(projectId);
-    const name = project?.name ?? projectId;
+    if (this.store.getChannel(projectId)) return;
+    if (this.store.getValue(`greeted:${projectId}`)) return;
+    this.store.setValue(`greeted:${projectId}`, "1");
+
+    const name = this.store.getProject(projectId)?.name ?? projectId;
     await this.sendProject(
       projectId,
-      `Project "${name}" connected. Reply to this message to address it, or use /use ${name}.`,
+      `**${name}** is connected. Send **/open ${name}** to work on it in its own group.`,
       false,
     );
   }
 
   // --- option menus --------------------------------------------------------
 
-  private choices(): PendingChoice[] {
-    const raw = this.store.getValue(`choices:${this.controlChannel}`);
+  private choices(channel: string = this.conversation): PendingChoice[] {
+    const raw = this.store.getValue(`choices:${channel}`);
     return raw ? (JSON.parse(raw) as PendingChoice[]) : [];
   }
 
-  private setChoices(list: PendingChoice[]): void {
-    this.store.setValue(`choices:${this.controlChannel}`, JSON.stringify(list));
+  private setChoices(list: PendingChoice[], channel: string = this.conversation): void {
+    this.store.setValue(`choices:${channel}`, JSON.stringify(list));
   }
 
   /** Post an option menu and remember it, so a reaction or number can answer it. */
   private async handleChoices(event: AgentEvent, task: Task): Promise<void> {
     const options = (event.choices ?? []).map((o) => o.trim()).filter(Boolean).slice(0, 10);
     if (options.length === 0) return;
-    const list = this.choices();
+    const channel = this.channelFor(task.projectId);
+    const list = this.choices(channel);
     const number = list.length + 1;
     const sent = await this.askChoices(task.projectId, options, this.pollQuestion(task.projectId, number));
     list.push({
@@ -605,7 +664,7 @@ export class CoreApp {
       options,
       number,
     });
-    this.setChoices(list);
+    this.setChoices(list, channel);
   }
 
   /**
@@ -621,7 +680,7 @@ export class CoreApp {
   ): Promise<OutgoingMessage> {
     if (options.length >= 2 && options.length <= 10) {
       try {
-        const poll = await this.signal.sendPoll(this.controlChannel, question, options, false);
+        const poll = await this.signal.sendPoll(this.channelFor(projectId), question, options, false);
         this.store.setValue(`msgProject:${poll.messageId}`, projectId);
         return poll;
       } catch (err: unknown) {
@@ -649,10 +708,10 @@ export class CoreApp {
 
   /** Resolve one or more picks; each option's text becomes a prompt of its own. */
   private async resolveChoices(choice: PendingChoice, indexes: number[]): Promise<void> {
+    const channel = this.channelFor(choice.projectId);
     const bad = indexes.filter((index) => !choice.options[index - 1]);
     if (bad.length > 0) {
-      await this.signal.send(
-        this.controlChannel,
+      await this.reply(
         `Option #${choice.number} has no choice ${bad.join(", ")}. Reply with 1-${choice.options.length}.`,
       );
       return;
@@ -660,17 +719,20 @@ export class CoreApp {
     const chosen = indexes.map((index) => choice.options[index - 1]!) as string[];
     const project = this.store.getProject(choice.projectId);
     if (!project) {
-      await this.signal.send(this.controlChannel, "That project is no longer configured.");
+      await this.reply("That project is no longer configured.");
       return;
     }
-    this.setChoices(this.choices().filter((c) => c.id !== choice.id));
+    this.setChoices(
+      this.choices(channel).filter((c) => c.id !== choice.id),
+      channel,
+    );
 
     if (choice.action === "model") {
       for (const index of indexes) {
         const ref = choice.values?.[index - 1];
         const slash = ref ? ref.indexOf("/") : -1;
         if (!ref || slash <= 0) {
-          await this.signal.send(this.controlChannel, "That model is no longer available.");
+          await this.reply("That model is no longer available.");
           continue;
         }
         await this.switchModel(project, {
@@ -687,7 +749,7 @@ export class CoreApp {
         await this.runTask(project, option);
       } catch (err: unknown) {
         this.logger.error("choice dispatch failed", { error: String(err) });
-        await this.signal.send(this.controlChannel, `Could not send the choice: ${String(err)}`);
+        await this.reply(`Could not send the choice: ${String(err)}`);
       }
     }
   }
@@ -709,8 +771,9 @@ export class CoreApp {
 
   /** A poll vote picks the option(s) of the menu that poll was sent for. */
   private async handlePollVote(vote: PollVote): Promise<void> {
+    this.conversation = vote.channelId;
     if (vote.indexes.length === 0) return; // retracted vote: leave the menu open
-    const choice = this.choices().find((c) => c.messageId === vote.targetId);
+    const choice = this.choices(vote.channelId).find((c) => c.messageId === vote.targetId);
     if (!choice) {
       await this.reportAnsweredPoll(vote);
       return;
@@ -731,23 +794,23 @@ export class CoreApp {
       poll: vote.targetId,
       indexes: vote.indexes,
     });
-    await this.signal.send(
-      this.controlChannel,
+    await this.reply(
       "That question was already answered, so the new pick was ignored. Send the text as a message to change it.",
     );
   }
 
   // --- approvals -----------------------------------------------------------
-  private pending(): PendingApproval[] {
-    const raw = this.store.getValue(`pending:${this.controlChannel}`);
+  private pending(channel: string = this.conversation): PendingApproval[] {
+    const raw = this.store.getValue(`pending:${channel}`);
     return raw ? (JSON.parse(raw) as PendingApproval[]) : [];
   }
 
-  private setPending(list: PendingApproval[]): void {
-    this.store.setValue(`pending:${this.controlChannel}`, JSON.stringify(list));
+  private setPending(list: PendingApproval[], channel: string = this.conversation): void {
+    this.store.setValue(`pending:${channel}`, JSON.stringify(list));
   }
 
   private async handlePermission(event: AgentEvent, task: Task): Promise<void> {
+    const channel = this.channelFor(task.projectId);
     const p = event.permission;
     if (!p) return;
     if (p.safe) {
@@ -763,11 +826,11 @@ export class CoreApp {
     const asked = `permissionAsked:${p.id}`;
     if (this.store.getValue(asked)) return;
     this.store.setValue(asked, "1");
-    const list = this.pending();
+    const list = this.pending(channel);
     const number = list.length + 1;
     const sent = await this.sendProject(
       task.projectId,
-      `Permission #${number} needs an answer — ${p.tool}\n${p.description}\nReply approve, deny or always (or react 👍 / 👎).`,
+      `**Approval needed** · \`${p.tool}\`\n${p.description}\n\nReply **approve**, **deny** or **always** — or tap 👍 / 👎.`,
     );
     list.push({
       permissionId: p.id,
@@ -777,16 +840,20 @@ export class CoreApp {
       number,
       messageId: sent.messageId,
     });
-    this.setPending(list);
+    this.setPending(list, channel);
   }
 
-  private async resolveApproval(decision: PermissionDecision, targetMessageId?: string): Promise<void> {
-    const list = this.pending();
+  private async resolveApproval(
+    decision: PermissionDecision,
+    targetMessageId?: string,
+    channel: string = this.conversation,
+  ): Promise<void> {
+    const list = this.pending(channel);
     const index = targetMessageId
       ? list.findIndex((p) => p.messageId === targetMessageId)
       : 0;
     if (index < 0) {
-      await this.signal.send(this.controlChannel, "That message has no pending approval.");
+      await this.reply("That message has no pending approval.");
       return;
     }
     const item = list[index]!;
@@ -795,22 +862,26 @@ export class CoreApp {
       this.store.setApproval(item.projectId, item.tool, "always");
     }
     list.splice(index, 1);
-    this.setPending(list);
+    this.setPending(list, channel);
     const word = decision === "reject" ? "denied" : decision === "always" ? "approved (always)" : "approved";
-    await this.signal.send(this.controlChannel, `${word}: ${item.tool}`);
+    await this.reply(`${word}: ${item.tool}`);
   }
 
   private async handleReaction(reaction: Reaction): Promise<void> {
+    // The reaction names its channel, so resolve in that channel's own state.
+    this.conversation = reaction.channelId;
     const map: Record<string, PermissionDecision> = { "👍": "once", "👎": "reject" };
     const decision = map[reaction.emoji];
-    const list = this.pending();
+    const list = this.pending(reaction.channelId);
     if (decision && list.some((p) => p.messageId === reaction.targetId)) {
-      await this.resolveApproval(decision, reaction.targetId);
+      await this.resolveApproval(decision, reaction.targetId, reaction.channelId);
       return;
     }
 
     // A reaction on an option menu picks that option.
-    const choice = this.choices().find((c) => c.messageId === reaction.targetId);
+    const choice = this.choices(reaction.channelId).find(
+      (c) => c.messageId === reaction.targetId,
+    );
     if (!choice) return;
     const index = emojiChoice(reaction.emoji, choice.options.length);
     if (index) await this.resolveChoice(choice, index);

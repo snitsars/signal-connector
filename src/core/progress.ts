@@ -12,8 +12,21 @@ const LABEL: Record<Task["state"], string> = {
 };
 
 export function statusLine(task: Task, detail?: string): string {
-  const d = detail ? ` — ${detail}` : "";
-  return `Task ${task.id} (${LABEL[task.state]})${d}`;
+  const head = `**Task** \`${shortId(task.id)}\` · ${LABEL[task.state]}`;
+  return detail ? `${head}\n${detail}` : head;
+}
+
+/** First 8 characters of a task id: enough to match, short enough to read. */
+export function shortId(id: string): string {
+  return id.slice(0, 8);
+}
+
+/** How long the task took, for the completion line. */
+export function duration(task: Task): string {
+  const seconds = Math.max(0, Math.round((task.updatedAt - task.startedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s`;
 }
 
 export function milestoneText(event: AgentEvent): string | undefined {
@@ -21,14 +34,14 @@ export function milestoneText(event: AgentEvent): string | undefined {
     case "files-changed": {
       const files = event.files ?? [];
       if (files.length === 0) return undefined;
-      const shown = files.slice(0, 5).join(", ");
+      const shown = files.slice(0, 5).map((file) => `\`${file}\``).join(", ");
       const more = files.length > 5 ? ` (+${files.length - 5} more)` : "";
-      return `Changed ${files.length} file(s): ${shown}${more}`;
+      return `• Changed ${files.length} file(s): ${shown}${more}`;
     }
     case "tests-run":
-      return event.text ? `Tests run: ${event.text}` : "Tests run";
+      return event.text ? `• Tests: ${event.text}` : "• Tests run";
     case "error":
-      return `Error: ${event.text ?? "unknown"}`;
+      return `• ⚠️ Error: ${event.text ?? "unknown"}`;
     default:
       return undefined;
   }
@@ -37,11 +50,11 @@ export function milestoneText(event: AgentEvent): string | undefined {
 export function summaryText(task: Task): string {
   switch (task.state) {
     case "done":
-      return `Done: ${task.summary ?? task.prompt}`;
+      return `**Done** · ${duration(task)}\n\n${task.summary ?? task.prompt}`;
     case "failed":
-      return `Failed: ${task.error ?? "unknown error"}`;
+      return `**Failed** · ${duration(task)}\n\n${task.error ?? "unknown error"}`;
     case "aborted":
-      return `Aborted: ${task.prompt}`;
+      return `**Aborted**\n\n${task.prompt}`;
     default:
       return statusLine(task);
   }
@@ -85,5 +98,8 @@ export function choicesText(options: string[], label?: string): string {
     const emoji = choiceEmoji(i + 1);
     return `${i + 1}. ${emoji ? `${emoji} ` : ""}${option}`;
   });
-  return [`${label ?? "Options"} — tap a reaction or reply with the number:`, ...lines].join("\n");
+  return [
+    `**${label ?? "Options"}** — tap a reaction or reply with the number:`,
+    ...lines,
+  ].join("\n");
 }

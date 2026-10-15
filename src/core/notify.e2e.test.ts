@@ -20,15 +20,20 @@ function setup() {
   return { store, signal, agent, app };
 }
 
-function msg(text: string) {
+function msg(text: string, channelId = "self") {
   return {
     id: String(Math.random()),
-    channelId: "self",
+    channelId,
     sender: "+1000",
     text,
     at: Date.now(),
-    inControlChannel: true,
+    inControlChannel: channelId === "self",
   };
+}
+
+/** The channel a project talks in (its own group), once it has one. */
+function projectChannel(signal: FakeSignal): string {
+  return signal.createdGroups.length > 0 ? `group-1-demo` : "self";
 }
 
 const texts = (signal: FakeSignal): string[] =>
@@ -39,9 +44,9 @@ describe("end-to-end notification flow", () => {
     const { signal, agent, app } = setup();
     await app.start();
 
-    signal.emitMessage(msg("/use demo"));
+    signal.emitMessage(msg("/open demo"));
     await tick();
-    signal.emitMessage(msg("add a retry"));
+    signal.emitMessage(msg("add a retry", projectChannel(signal)));
     await tick();
     const taskId = agent.started[0]!.taskId;
 
@@ -56,25 +61,28 @@ describe("end-to-end notification flow", () => {
       permission: { id: "p1", taskId, tool: "bash", description: "run ls", safe: false },
     });
     await tick();
-    signal.emitMessage(msg("approve"));
+    signal.emitMessage(msg("approve", projectChannel(signal)));
     await tick();
     agent.emit({ type: "idle", taskId, at: Date.now(), summary: "added retry", diffPath: "C:/tmp/x.patch" });
     await tick();
 
-    // First op: the active-project confirmation.
-    expect(signal.ops[0]).toMatchObject({ op: "send", text: "Active project: demo" });
+    // The project's own group is introduced, then the /open confirmation.
+    expect(texts(signal).some((t) => t.includes("this group is for this project"))).toBe(true);
+    expect(signal.ops.some((o) => o.op === "send" && o.text.startsWith("Opened demo"))).toBe(
+      true,
+    );
     // Exactly one status message, edited in place (never duplicated).
-    const statusSend = signal.ops.find((o) => o.op === "send" && o.text.startsWith("Project: demo\nTask "))!;
+    const statusSend = signal.ops.find((o) => o.op === "send" && o.text.startsWith("Task "))!;
     const edits = signal.ops.filter((o) => o.op === "edit");
     expect(edits.length).toBeGreaterThan(0);
     expect(edits.every((o) => o.op === "edit" && o.messageId === statusSend.messageId)).toBe(true);
-    expect(signal.ops.filter((o) => o.op === "send" && o.text.startsWith("Project: demo\nTask "))).toHaveLength(1);
+    expect(signal.ops.filter((o) => o.op === "send" && o.text.startsWith("Task "))).toHaveLength(1);
 
     const all = texts(signal);
-    expect(all).toContain("Project: demo\nChanged 1 file(s): a.ts");
-    expect(all.some((t) => t.startsWith("Project: demo\nPermission #1"))).toBe(true);
+    expect(all.some((t) => t.includes("Changed 1 file(s)"))).toBe(true);
+    expect(all.some((t) => t.includes("Approval needed"))).toBe(true);
     expect(all).toContain("approved: bash");
-    expect(all).toContain("Project: demo\nDone: added retry");
+    expect(all.some((t) => t.includes("added retry"))).toBe(true);
     expect(signal.ops.at(-1)).toMatchObject({ op: "attach", filePath: "C:/tmp/x.patch" });
   });
 
@@ -82,9 +90,9 @@ describe("end-to-end notification flow", () => {
     const { signal, agent, app } = setup();
     await app.start();
 
-    signal.emitMessage(msg("/use demo"));
+    signal.emitMessage(msg("/open demo"));
     await tick();
-    signal.emitMessage(msg("do work"));
+    signal.emitMessage(msg("do work", projectChannel(signal)));
     await tick();
     const taskId = agent.started[0]!.taskId;
 
@@ -92,7 +100,7 @@ describe("end-to-end notification flow", () => {
     await tick();
 
     const all = texts(signal);
-    expect(all.at(-1)).toBe("Project: demo\nFailed: boom");
+    expect(all.at(-1)).toContain("boom");
     expect(signal.ops.some((o) => o.op === "attach")).toBe(false);
   });
 });

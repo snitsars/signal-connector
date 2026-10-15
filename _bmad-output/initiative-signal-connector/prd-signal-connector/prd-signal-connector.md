@@ -41,8 +41,10 @@ One technical operator (solo). No personas beyond that; there is a single operat
 - **TC2**: The service receives incoming messages in near real time and persists them locally.
 - **TC3**: The service sends text, and edits a previously sent message in place.
 - **TC4**: The service sends file attachments (e.g. a diff).
-- **TC5**: The service restricts itself to a single configured channel — Note-to-Self by default
-  — and ignores messages outside it.
+- **TC5**: One **control channel** is configured (Note-to-Self, or a group). On demand the service
+  may create a **project channel** — a group containing only the operator — and send that project's
+  traffic there; project channels are recorded in the store and reused. Messages outside the control
+  channel and the known project channels are ignored.
 - **TC6**: The service survives daemon restarts and reconnects automatically.
 - **TC7**: Send volume stays within human-scale limits; the service applies a conservative
   outbound rate limit and never broadcasts.

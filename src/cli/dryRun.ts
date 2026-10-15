@@ -7,7 +7,7 @@
 import readline from "node:readline";
 import { writeDiffFile } from "../adapters/agent/diff.js";
 import { ConfigSchema } from "../config/config.js";
-import type { AgentPort, SignalPort, StartTaskInput } from "../core/ports.js";
+import type { AgentPort, QuoteRef, SendOptions, SignalPort, StartTaskInput } from "../core/ports.js"
 import { CoreApp } from "../core/app.js";
 import type {
   AgentEvent,
@@ -32,7 +32,11 @@ class ConsoleSignal implements SignalPort {
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
 
-  async send(_channelId: string, text: string): Promise<OutgoingMessage> {
+  async createGroup(name: string): Promise<{ groupId: string }> {
+    return { groupId: `group-${name.toLowerCase()}` };
+  }
+
+  async send(_channelId: string, text: string, options?: SendOptions): Promise<OutgoingMessage> {
     process.stdout.write(`[signal] ${text}\n`);
     return { messageId: `m${++this.seq}` };
   }
@@ -40,6 +44,8 @@ class ConsoleSignal implements SignalPort {
     _channelId: string,
     question: string,
     options: string[],
+    _allowMultiple = false,
+    _quote?: QuoteRef,
   ): Promise<OutgoingMessage> {
     process.stdout.write(
       `[signal poll] ${question}\n${options.map((o, i) => `  ${i + 1}. ${o}`).join("\n")}\n`,
@@ -49,10 +55,15 @@ class ConsoleSignal implements SignalPort {
   onPollVote(handler: (v: PollVote) => void): void {
     this.pollVoteHandlers.push(handler);
   }
-  async edit(_channelId: string, messageId: string, text: string): Promise<void> {
+  async edit(_channelId: string, messageId: string, text: string, _options?: SendOptions): Promise<void> {
     process.stdout.write(`[signal edit ${messageId}] ${text}\n`);
   }
-  async attach(_channelId: string, filePath: string, caption?: string): Promise<OutgoingMessage> {
+  async attach(
+    _channelId: string,
+    filePath: string,
+    caption?: string,
+    _quote?: QuoteRef,
+  ): Promise<OutgoingMessage> {
     process.stdout.write(`[signal attach] ${filePath}${caption ? ` (${caption})` : ""}\n`);
     return { messageId: `a${++this.seq}` };
   }
@@ -87,8 +98,7 @@ class ScriptedAgent implements AgentPort {
     return { sessionId: `dry-${++this.seq}` };
   }
 
-  async listModels(): Promise<ModelRef[]> {
-    return [
+  async listModels(): Promise<ModelRef[]> {    return [
       { providerID: "demo", id: "model-a", name: "demo/model-a" },
       { providerID: "demo", id: "model-b", name: "demo/model-b" },
     ];
