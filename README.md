@@ -108,6 +108,20 @@ session = 'ses_ec42cabb8ffe8UkLJmCcd8w06c'   # the id shown in OPENCODE_SESSION_
 
 Restart the service after editing, and `/new` moves the project off the pin.
 
+### Message colours
+
+Signal has no coloured text, so state is carried by circles. The language:
+
+| Mark | Means | Used for |
+|---|---|---|
+| 🔵 | working | a task's live status line (starting, running) |
+| 🟢 | all fine | task completed |
+| 🔴 | needs attention | task failed, an approval is waiting, opencode asked a question, a launch/model/group operation failed |
+| 🟡 | worth knowing | milestones, notices, `/open` confirmations, model switches, approvals answered, general replies |
+
+Text styles run alongside: bold for headers, monospace for ids, paths, tools and
+model names, strikethrough and italic where they help.
+
 ### Interactive choices (tap instead of type)
 
 Signal messages are plain text, so there are no buttons to send. The equivalent is a **reaction**:

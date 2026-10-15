@@ -118,7 +118,7 @@ describe("CoreApp", () => {
 
     ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
     await tick();
-    const status = ctx.signal.sent.find((m) => m.text.startsWith("Task "))!;
+    const status = ctx.signal.sent.find((m) => m.text.includes("Task "))!;
     expect(status.channelId).toBe("group-1-demo");
   });
 
@@ -264,7 +264,7 @@ describe("CoreApp", () => {
     await tick();
     expect(ctx.agent.started).toHaveLength(1);
     expect(ctx.agent.started[0]?.prompt).toBe("add a retry");
-    expect(ctx.signal.sent.some((m) => m.text.startsWith("Task "))).toBe(true);
+    expect(ctx.signal.sent.some((m) => m.text.includes("Task "))).toBe(true);
   });
 
   it("hands saved attachments to the agent as file paths", async () => {
@@ -444,7 +444,7 @@ describe("CoreApp", () => {
     ctx.agent.emit({ type: "choices", taskId, at: Date.now(), choices: ["retry", "revert"] });
     await tick();
     const poll = ctx.signal.polls.at(-1)!;
-    expect(poll.question).toBe("demo — pick one");
+    expect(poll.question).toContain("demo — pick one");
 
     // Reacting to the poll message still picks an option.
     ctx.signal.emitReaction({
@@ -718,7 +718,7 @@ describe("CoreApp", () => {
     ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
     await tick();
     const taskId = ctx.agent.started[0]!.taskId;
-    const statusMsg = ctx.signal.sent.find((m) => m.text.startsWith("Task "))!;
+    const statusMsg = ctx.signal.sent.find((m) => m.text.includes("Task "))!;
 
     ctx.agent.emit({ type: "status", taskId, at: Date.now(), text: "editing src/http.ts" });
     await tick();
@@ -764,7 +764,7 @@ describe("CoreApp", () => {
 
     ctx.signal.emitMessage(incoming("do work"));
     await tick();
-    const status = ctx.signal.sent.find((m) => m.text.startsWith("Task "))!;
+    const status = ctx.signal.sent.find((m) => m.text.includes("Task "))!;
     expect(status.quote).toBeUndefined();
     expect(status.text).not.toContain("Project:");
   });

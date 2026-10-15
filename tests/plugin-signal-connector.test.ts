@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  diffTextFrom,
   extractAttachments,
   extractOptions,
   mapServerEvent,
@@ -135,6 +136,25 @@ describe("extractAttachments", () => {
 
   it("leaves ordinary text alone", () => {
     expect(extractAttachments("no markers")).toEqual({ text: "no markers", paths: [] });
+  });
+});
+
+describe("diffTextFrom", () => {
+  it("joins the patches from a { data } envelope", () => {
+    expect(
+      diffTextFrom({ data: [{ patch: "@@ -1 +1 @@\n-a\n+b" }, { patch: "@@ -2 +2 @@" }] }),
+    ).toBe("@@ -1 +1 @@\n-a\n+b\n@@ -2 +2 @@");
+  });
+
+  it("accepts a bare array or a string", () => {
+    expect(diffTextFrom([{ patch: "p1" }])).toBe("p1");
+    expect(diffTextFrom("plain patch")).toBe("plain patch");
+  });
+
+  it("returns nothing when there is no patch to send", () => {
+    expect(diffTextFrom({ data: [] })).toBe("");
+    expect(diffTextFrom({ data: [{ addititions: 3 }] })).toBe("");
+    expect(diffTextFrom(undefined)).toBe("");
   });
 });
 

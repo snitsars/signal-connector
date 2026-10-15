@@ -3,6 +3,26 @@
  */
 import type { AgentEvent, Task } from "../domain/types.js";
 
+/**
+ * The colour language for messages. Signal has no coloured text, so state is
+ * carried by circles: blue = working, green = fine, red = needs attention
+ * (a failure or a question blocking the process), yellow = worth knowing.
+ */
+export const MARK = {
+  working: "🔵",
+  ok: "🟢",
+  attention: "🔴",
+  info: "🟡",
+} as const;
+
+const MARK_BY_STATE: Record<Task["state"], string> = {
+  started: MARK.working,
+  running: MARK.working,
+  done: MARK.ok,
+  failed: MARK.attention,
+  aborted: MARK.info,
+};
+
 const LABEL: Record<Task["state"], string> = {
   started: "starting",
   running: "running",
@@ -12,7 +32,7 @@ const LABEL: Record<Task["state"], string> = {
 };
 
 export function statusLine(task: Task, detail?: string): string {
-  const head = `**Task** \`${shortId(task.id)}\` · ${LABEL[task.state]}`;
+  const head = `${MARK_BY_STATE[task.state]} **Task** \`${shortId(task.id)}\` · ${LABEL[task.state]}`;
   return detail ? `${head}\n${detail}` : head;
 }
 
@@ -36,12 +56,12 @@ export function milestoneText(event: AgentEvent): string | undefined {
       if (files.length === 0) return undefined;
       const shown = files.slice(0, 5).map((file) => `\`${file}\``).join(", ");
       const more = files.length > 5 ? ` (+${files.length - 5} more)` : "";
-      return `• Changed ${files.length} file(s): ${shown}${more}`;
+      return `${MARK.info} Changed ${files.length} file(s): ${shown}${more}`;
     }
     case "tests-run":
-      return event.text ? `• Tests: ${event.text}` : "• Tests run";
+      return event.text ? `${MARK.info} Tests: ${event.text}` : `${MARK.info} Tests run`;
     case "error":
-      return `• ⚠️ Error: ${event.text ?? "unknown"}`;
+      return `${MARK.attention} Error: ${event.text ?? "unknown"}`;
     default:
       return undefined;
   }
@@ -50,11 +70,11 @@ export function milestoneText(event: AgentEvent): string | undefined {
 export function summaryText(task: Task): string {
   switch (task.state) {
     case "done":
-      return `**Done** · ${duration(task)}\n\n${task.summary ?? task.prompt}`;
+      return `${MARK.ok} **Done** · ${duration(task)}\n\n${task.summary ?? task.prompt}`;
     case "failed":
-      return `**Failed** · ${duration(task)}\n\n${task.error ?? "unknown error"}`;
+      return `${MARK.attention} **Failed** · ${duration(task)}\n\n${task.error ?? "unknown error"}`;
     case "aborted":
-      return `**Aborted**\n\n${task.prompt}`;
+      return `${MARK.info} **Aborted**\n\n${task.prompt}`;
     default:
       return statusLine(task);
   }

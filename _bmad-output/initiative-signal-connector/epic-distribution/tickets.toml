@@ -1,0 +1,135 @@
+# tickets.toml - epic-distribution, in build order. Table order is build order; `id` is not.
+# Entries cite capability ids from spec-distribution/spec-distribution.md.
+
+[[entry]]
+id = 1
+type = "story"
+title = "Package the daemon as an installable CLI"
+description = "Makes the package publishable and runnable as a command: manifest fields a stranger needs (description, license, repository, keywords, files, engines), a built bin entry, a CLI that answers --version and --help and starts the daemon when given no arguments, and the opencode plugin file the package must ship for entry 6 to install."
+verify = "In a clean shell, `npm pack` then `npm install -g ./signal-connector-*.tgz` yields a `signal-connector` command whose --version prints the package version; the Windows scripts still start the daemon unchanged."
+covers = ["CAP-1"]
+after = []
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 2
+type = "story"
+title = "Setup-step interface and doctor/setup commands"
+description = "Defines the one contract every first-run step implements (id, what it checks, what it does, how it reports) and wires it into `setup` (runs steps in order, resumable) and `doctor` (reports without changing anything)."
+verify = "`doctor` lists the registered steps with their state and exits non-zero when any reports a problem; `setup` runs the same steps in order and is safe to run twice."
+covers = ["CAP-2", "CAP-3"]
+after = [1]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 3
+type = "story"
+title = "Prerequisite checks with actionable guidance"
+description = "Steps that detect Node, Java, signal-cli, opencode, the data directory, the config file and the secrets store, each naming what is missing and the exact command or link to fix it."
+verify = "With java and opencode removed from PATH, doctor names both, prints the fix for each and exits non-zero, and the daemon refuses to start with the same guidance; with everything present it exits 0 and starts the daemon."
+covers = ["CAP-3"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 4
+type = "story"
+title = "signal-cli acquisition step"
+description = "Detects an installed signal-cli and its version; when it is missing, fetches the release matching the OS and the installed Java major into the data directory, hands the resolved invocation to entry 5, which owns config.toml, and prints the manual steps when fetching is impossible."
+verify = "On a machine without signal-cli, `setup` ends with a daemon that answers the JSON-RPC endpoint; when the download is blocked, it prints the exact commands instead of failing silently."
+covers = ["CAP-3"]
+after = [3]
+hitl = true
+risk = "high"
+unknown = "Whether the release assets and Java version mapping can be resolved without a maintained lookup table."
+
+[[entry]]
+id = 5
+type = "story"
+title = "Device link and configuration step"
+description = "The first-run step that links the account and owns config.toml: show the QR in the terminal, wait for the link, write the whole valid config (account from entry 4's resolved invocation, one project, outbound limits) and report the linked number; refuses to overwrite an existing account without asking."
+verify = "On a clean machine, scanning the printed QR links the device, `config.toml` contains the account and one project, and the daemon starts and receives a message."
+covers = ["CAP-2"]
+after = [3, 4]
+hitl = true
+risk = "high"
+
+[[entry]]
+id = 6
+type = "story"
+title = "opencode plugin install and update step"
+description = "Ships the plugin with the package and installs or refreshes it in the opencode plugins directory, reporting the version it wrote; a stale or duplicate copy is replaced, and a second copy in the project is reported as a conflict."
+verify = "`signal-connector plugin install` writes the plugin and `plugin status` prints the package version; reinstalling after a version bump replaces the file, and the plugin connects to a running service."
+covers = ["CAP-5"]
+after = [2]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 7
+type = "story"
+title = "Secrets that persist on every platform"
+description = "Replaces the DPAPI-only store with one that persists on macOS and Linux as well (an OS keystore where available, a user-scoped file otherwise, documented), keeping Windows DPAPI behaviour; no secret value reaches a log line or the repository."
+verify = "A value written by the store survives a process restart on Linux and macOS in a test that needs no linked account, the DPAPI path still passes on Windows, and no secret value appears in a log line."
+covers = ["CAP-4"]
+after = [1]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 8
+type = "story"
+title = "Newcomer documentation"
+description = "Rewrites the reader-facing documentation around the release artifacts: quick start per OS, prerequisites with what each is for, the first-run walkthrough, troubleshooting for the failures doctor reports, upgrade and uninstall, and where secrets live."
+verify = "A person following only the published README on a clean machine reaches a Signal reply, and every command in it exists and works as written."
+covers = ["CAP-1", "CAP-2"]
+after = [5, 6]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 9
+type = "story"
+title = "CI on every supported OS"
+description = "A pipeline that installs, builds, type-checks and tests on Windows, macOS and Linux for every push, so the cross-platform claim is checked rather than asserted."
+verify = "A push runs the suite on all three and fails the build when any platform fails typecheck or tests."
+covers = ["CAP-6", "CAP-4"]
+after = [1]
+hitl = true
+risk = "medium"
+
+[[entry]]
+id = 10
+type = "story"
+title = "Release: one tag, both artifacts"
+description = "Tagging a version publishes the npm package and attaches the GitHub release zip from that commit, after the three-OS suite passes; the release notes name the prerequisites the user still supplies."
+verify = "Tagging vX.Y.Z yields the npm version and the GitHub zip from the same commit after the entry 9 three-OS suite is green, and installing either on a clean machine gives the same `--version`."
+covers = ["CAP-6"]
+after = [9]
+hitl = true
+risk = "medium"
+
+[[entry]]
+id = 11
+type = "story"
+title = "Refactor sweep"
+description = "Cleanup only, scoped when it starts from the epic's plans and review findings: fold the duplicated platform branches together, retire what the CLI path replaced, and leave the documentation and scripts consistent with each other."
+verify = "No duplicated platform branch or dead script remains that the epic's own review flagged; typecheck and the full suite still pass."
+covers = []
+after = [4, 5, 6, 7, 8, 10]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 12
+type = "story"
+title = "Install end-to-end suite"
+description = "One suite that proves the epic's promise rather than the code: install from the packed artifact in a clean environment, run doctor and setup against a fake Signal account and a stub opencode, and assert the guided path completes and reports correctly on each supported OS."
+verify = "The suite fails if the package stops installing cleanly, if doctor stops naming a missing prerequisite, if setup stops reaching a runnable daemon with fake ports, or if the clone-based workflow stops passing typecheck and the test suite."
+covers = ["CAP-1", "CAP-2", "CAP-3", "CAP-4"]
+after = [11]
+hitl = false
+risk = "medium"

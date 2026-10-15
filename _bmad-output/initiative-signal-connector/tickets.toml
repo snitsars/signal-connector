@@ -35,3 +35,9 @@ after = [
   { epic = 3, needs = "the agent event stream" },
   { epic = 4, needs = "the task lifecycle" },
 ]
+
+[[epic]]
+id = 6
+slug = "epic-distribution"
+title = "A stranger can install SignalConnector and get a reply"
+covers = ["CAP-1", "CAP-2", "CAP-3", "CAP-4", "CAP-5", "CAP-6"]

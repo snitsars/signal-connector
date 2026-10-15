@@ -20,6 +20,7 @@ import type {
 } from "../domain/types.js";
 import type { AgentPort, LauncherPort, QuoteRef, SignalPort } from "./ports.js";
 import { renderStyled } from "./format.js";
+import { MARK } from "./progress.js";
 import { HELP_TEXT, KNOWN_COMMANDS, parseInput } from "./router.js";
 import {
   choicesText,
@@ -449,7 +450,7 @@ export class CoreApp {
     const sessionId = this.store.getSession(project.id) ?? "";
     try {
       await this.agent.setModel({ project, sessionId, model });
-      await this.sendProject(project.id, `**Model** · \`${model.providerID}/${model.id}\``);
+      await this.sendProject(project.id, `🧠 **Model** · \`${model.providerID}/${model.id}\``);
     } catch (err: unknown) {
       this.logger.error("model switch failed", { project: project.name, error: String(err) });
       await this.reply(`Could not switch the model: ${String(err)}`);
@@ -529,7 +530,7 @@ export class CoreApp {
       await this.editStatus(done, event.summary);
       await this.sendProject(done.projectId, summaryText(done));
       if (event.diffPath) {
-        await this.signal.attach(this.channelFor(task.projectId), event.diffPath, "diff");
+        await this.signal.attach(this.channelFor(task.projectId), event.diffPath, "📄 Working diff");
       }
       return;
     }
@@ -564,7 +565,8 @@ export class CoreApp {
     // A notice is something to tell the operator but not to act on (opencode's
     // questions can only be answered in its own window).
     if (event.type === "notice" && event.text) {
-      await this.sendProject(task.projectId, `⚠️ ${event.text}`);
+      const mark = event.severity === "attention" ? MARK.attention : MARK.info;
+      await this.sendProject(task.projectId, `${mark} ${event.text}`);
     }
 
     this.store.updateTask(task.id, { state: "running", updatedAt: this.now() });
@@ -584,8 +586,8 @@ export class CoreApp {
   }
 
   /** Operator-facing message: markup is rendered into Signal's text styles. */
-  private async reply(markup: string): Promise<OutgoingMessage> {
-    const { text, styles } = renderStyled(markup);
+  private async reply(markup: string, mark: string = MARK.info): Promise<OutgoingMessage> {
+    const { text, styles } = renderStyled(`${mark} ${markup}`);
     return await this.signal.send(this.conversation, text, { styles });
   }
 
@@ -680,14 +682,15 @@ export class CoreApp {
   ): Promise<OutgoingMessage> {
     if (options.length >= 2 && options.length <= 10) {
       try {
-        const poll = await this.signal.sendPoll(this.channelFor(projectId), question, options, false);
+        const marked = `${MARK.attention} ${question}`;
+    const poll = await this.signal.sendPoll(this.channelFor(projectId), marked, options, false);
         this.store.setValue(`msgProject:${poll.messageId}`, projectId);
         return poll;
       } catch (err: unknown) {
         this.logger.warn("poll send failed, using a text menu", { error: String(err) });
       }
     }
-    return this.sendProject(projectId, choicesText(options, question));
+    return this.sendProject(projectId, choicesText(options, `${MARK.attention} ${question}`));
   }
 
   /**
@@ -830,7 +833,7 @@ export class CoreApp {
     const number = list.length + 1;
     const sent = await this.sendProject(
       task.projectId,
-      `**Approval needed** · \`${p.tool}\`\n${p.description}\n\nReply **approve**, **deny** or **always** — or tap 👍 / 👎.`,
+      `${MARK.attention} **Approval needed** · \`${p.tool}\`\n${p.description}\n\nReply **approve**, **deny** or **always** — or tap 👍 / 👎.`,
     );
     list.push({
       permissionId: p.id,

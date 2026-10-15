@@ -23,6 +23,8 @@ export interface EventMessage {
   type: "event";
   taskId: string;
   event: AgentEvent;
+  /** Working-tree patch text to attach on completion (adapter writes it). */
+  diffText?: string;
 }
 
 export interface SessionCreatedMessage {

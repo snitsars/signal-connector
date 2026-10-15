@@ -27,6 +27,8 @@ export interface EventEnvelope {
   projectId: string;
   taskId: string;
   event: AgentEvent;
+  /** Patch text the plugin sent with the event, for the adapter to write. */
+  diffText?: string;
 }
 
 export class BridgeHub {
@@ -57,7 +59,13 @@ export class BridgeHub {
     if (!conn) return;
     switch (msg.type) {
       case "event": {
-        const envelope: EventEnvelope = { projectId: conn.projectId, taskId: (msg as EventMessage).taskId, event: (msg as EventMessage).event };
+        const message = msg as EventMessage;
+        const envelope: EventEnvelope = {
+          projectId: conn.projectId,
+          taskId: message.taskId,
+          event: message.event,
+          ...(message.diffText ? { diffText: message.diffText } : {}),
+        };
         for (const handler of this.eventHandlers) handler(envelope);
         return;
       }

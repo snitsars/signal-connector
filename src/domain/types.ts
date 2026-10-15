@@ -34,8 +34,7 @@ export type AgentEventType =
   | "permission"
   | "choices"
   /** Something the operator should know but cannot act on (e.g. a question). */
-  | "notice"
-  | "error"
+  | "notice"  | "error"
   | "idle";
 
 export interface PermissionRequest {
@@ -73,6 +72,8 @@ export interface AgentEvent {
   summary?: string;
   /** For completion: a path to a diff to attach. */
   diffPath?: string;
+  /** "attention" means the agent is blocked until someone acts. */
+  severity?: "info" | "attention";
 }
 
 export interface IncomingMessage {

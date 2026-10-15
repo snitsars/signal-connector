@@ -103,6 +103,25 @@ export function modelRefsFrom(result: unknown): { providerID: string; id: string
 }
 
 /**
+ * The patch text out of a VCS diff result. The client may hand back the envelope
+ * (`{ data: [...] }`) or the array itself, and each entry carries a `patch`.
+ */
+export function diffTextFrom(result: unknown): string {
+  if (typeof result === "string") return result;
+  const data = Array.isArray(result)
+    ? result
+    : ((result as { data?: unknown } | null | undefined)?.data as unknown[] | undefined);
+  if (!Array.isArray(data)) return "";
+  return data
+    .map((entry) => (entry as { patch?: unknown } | null | undefined)?.patch)
+    .filter((patch): patch is string => typeof patch === "string" && patch.length > 0)
+    .join("\n");
+}
+
+/** Attachments are capped: a huge diff is useless on a phone. */
+const DIFF_LIMIT = 100_000;
+
+/**
  * Pending permission requests out of a `ctx.permission.list` result. The server
  * answers `{ data: [...] }`; older shapes return the array directly. The plugin
  * used to iterate the envelope object itself, which throws on every poll — and
@@ -174,11 +193,15 @@ export function mapServerEvent(
           type: "notice",
           at,
           text: "opencode is asking a question — it has to be answered in the window; the agent is waiting.",
+          severity: "attention",
         },
       };
     case "question.replied":
     case "question.rejected":
-      return { sessionID, event: { type: "notice", at, text: "question answered" } };
+      return {
+        sessionID,
+        event: { type: "notice", at, text: "question answered, the agent continues" },
+      };
     case "session.idle":
     case "session.execution.succeeded":
       return { sessionID, event: { type: "idle", at, summary: "session idle" } };
@@ -237,9 +260,31 @@ async function setup(ctx: any): Promise<() => void> {
   const send = (message: unknown): void => {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify(message));
   };
-  const emit = (taskId: string, event: Omit<AgentEvent, "taskId">): void => {
-    send({ type: "event", taskId, event: { ...event, taskId } });
+  const emit = (taskId: string, event: Omit<AgentEvent, "taskId">, diffText?: string): void => {
+    send({
+      type: "event",
+      taskId,
+      event: { ...event, taskId },
+      ...(diffText ? { diffText } : {}),
+    });
   };
+
+  /**
+   * The working-tree diff, so a completed task can arrive with its patch. The
+   * VCS API is version-dependent, so accept the shapes we know and never let a
+   * missing diff break the completion event.
+   */
+  async function collectDiff(): Promise<string | undefined> {
+    try {
+      const result = await ctx.vcs?.diff?.({ mode: "working", context: 3 });
+      const text = diffTextFrom(result);
+      if (!text) return undefined;
+      return text.length > DIFF_LIMIT ? `${text.slice(0, DIFF_LIMIT)}\n…(truncated)` : text;
+    } catch (err) {
+      send({ type: "diag", detail: `could not read the working diff: ${String(err)}` });
+      return undefined;
+    }
+  }
 
   async function handleCommand(message: any): Promise<void> {
     if (message?.type === "command" && message.kind === "prompt") {
@@ -415,6 +460,9 @@ async function setup(ctx: any): Promise<() => void> {
             event = { ...event, summary: summarizeIdle(event.summary ?? "session idle", lastText.get(taskId)) };
           }
           lastText.delete(taskId);
+          const diffText = event.type === "idle" ? await collectDiff() : undefined;
+          emit(taskId, event, diffText);
+          continue;
         }
         emit(taskId, event);
       }

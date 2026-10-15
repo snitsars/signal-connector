@@ -8,6 +8,7 @@ import type { Logger } from "../../logging/logger.js";
 import type { AgentEvent, ModelRef, PermissionDecision, Project } from "../../domain/types.js";
 import type { BridgeHub } from "../../bridge/hub.js";
 import type { AgentPort, StartTaskInput } from "../../core/ports.js";
+import { writeDiffFile } from "./diff.js";
 
 export class PluginBridgeAgent implements AgentPort {
   private readonly handlers: ((e: AgentEvent) => void)[] = [];
@@ -23,7 +24,12 @@ export class PluginBridgeAgent implements AgentPort {
       if (envelope.event.type === "permission" && envelope.event.permission) {
         this.permissionProject.set(envelope.event.permission.id, envelope.projectId);
       }
-      for (const handler of this.handlers) handler(envelope.event);
+      // The plugin sends the patch text; writing the file and attaching it stays
+      // on this side of the bridge (AD-7: the core only sees a path).
+      const event = envelope.diffText
+        ? { ...envelope.event, diffPath: writeDiffFile(envelope.diffText) }
+        : envelope.event;
+      for (const handler of this.handlers) handler(event);
     });
   }
 

@@ -68,20 +68,20 @@ describe("end-to-end notification flow", () => {
 
     // The project's own group is introduced, then the /open confirmation.
     expect(texts(signal).some((t) => t.includes("this group is for this project"))).toBe(true);
-    expect(signal.ops.some((o) => o.op === "send" && o.text.startsWith("Opened demo"))).toBe(
+    expect(signal.ops.some((o) => o.op === "send" && o.text.includes("Opened demo"))).toBe(
       true,
     );
     // Exactly one status message, edited in place (never duplicated).
-    const statusSend = signal.ops.find((o) => o.op === "send" && o.text.startsWith("Task "))!;
+    const statusSend = signal.ops.find((o) => o.op === "send" && o.text.includes("Task "))!;
     const edits = signal.ops.filter((o) => o.op === "edit");
     expect(edits.length).toBeGreaterThan(0);
     expect(edits.every((o) => o.op === "edit" && o.messageId === statusSend.messageId)).toBe(true);
-    expect(signal.ops.filter((o) => o.op === "send" && o.text.startsWith("Task "))).toHaveLength(1);
+    expect(signal.ops.filter((o) => o.op === "send" && o.text.includes("Task "))).toHaveLength(1);
 
     const all = texts(signal);
     expect(all.some((t) => t.includes("Changed 1 file(s)"))).toBe(true);
     expect(all.some((t) => t.includes("Approval needed"))).toBe(true);
-    expect(all).toContain("approved: bash");
+    expect(all.some((t) => t.includes("approved: bash"))).toBe(true);
     expect(all.some((t) => t.includes("added retry"))).toBe(true);
     expect(signal.ops.at(-1)).toMatchObject({ op: "attach", filePath: "C:/tmp/x.patch" });
   });
