@@ -1,7 +1,12 @@
+#!/usr/bin/env node
 /**
  * Composition root. Wires concrete adapters into the core (spine AD-1).
  * This is the only place that knows which adapter implementations exist.
+ *
+ * Also the `signal-connector` command: --version and --help are answered before
+ * anything is started, so they work without a config, a store or a signal-cli.
  */
+import { readFileSync, writeSync } from "node:fs";
 import path from "node:path";
 import { createAgentAdapter } from "./adapters/agent/factory.js";
 import { ProjectLaunchers } from "./adapters/launcher/registry.js";
@@ -15,6 +20,25 @@ import { CoreApp } from "./core/app.js";
 import type { LauncherPort } from "./core/ports.js";
 import { createLogger } from "./logging/logger.js";
 import { openStore } from "./store/store.js";
+import { parseArgs, USAGE } from "./cli/args.js";
+
+/** Reads the version from the manifest beside the build output (and the sources). */
+function packageVersion(): string {
+  try {
+    const raw = readFileSync(new URL("../package.json", import.meta.url), "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    const version = (parsed as { version?: unknown }).version;
+    return typeof version === "string" ? version : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function print(fd: 1 | 2, text: string): void {
+  // writeSync, not process.stdout.write: the process exits immediately after and
+  // a piped stdout would be cut short by process.exit.
+  writeSync(fd, `${text}\n`);
+}
 
 async function main(): Promise<void> {
   const dir = dataDir();
@@ -99,7 +123,20 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => void shutdown());
 }
 
-main().catch((err: unknown) => {
-  process.stderr.write(`fatal: ${String(err)}\n`);
+const mode = parseArgs(process.argv.slice(2));
+
+if (mode === "version") {
+  print(1, packageVersion());
+  process.exit(0);
+} else if (mode === "help") {
+  print(1, USAGE);
+  process.exit(0);
+} else if (mode === "usage") {
+  print(2, `unrecognised arguments: ${process.argv.slice(2).join(" ")}\n\n${USAGE}`);
   process.exit(1);
-});
+} else {
+  main().catch((err: unknown) => {
+    process.stderr.write(`fatal: ${String(err)}\n`);
+    process.exit(1);
+  });
+}

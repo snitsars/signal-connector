@@ -1,12 +1,33 @@
 {
   "name": "signal-connector",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "Bridge a Signal chat to a local opencode coding agent.",
+  "license": "MIT",
+  "author": "snitsars",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/snitsars/signal-connector.git"
+  },
+  "bugs": {
+    "url": "https://github.com/snitsars/signal-connector/issues"
+  },
+  "keywords": [
+    "signal",
+    "signal-cli",
+    "opencode",
+    "coding-agent",
+    "bridge",
+    "cli"
+  ],
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
+  "files": [
+    "dist",
+    "plugins"
+  ],
   "bin": {
     "signal-connector": "./dist/index.js"
   },
@@ -18,7 +39,9 @@
     "link": "tsx src/cli/link.ts",
     "dry": "tsx src/cli/dryRun.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "qrcode": "^1.5.4",
