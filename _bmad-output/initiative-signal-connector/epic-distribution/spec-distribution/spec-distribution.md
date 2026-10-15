@@ -16,7 +16,7 @@ sources: []
 
 - **CAP-1**
   - **intent:** A person with no repository clone can install the connector from a published artifact — the npm package or the GitHub release zip — and get a runnable `signal-connector` command.
-  - **success:** On a machine with only Node ≥ 20 installed, `npx <package> --version` and, from the unzipped release, `npm install -g .` both yield the same version without network access to the repository.
+  - **success:** On a machine with only Node ≥ 22.13 installed, `npx <package> --version` and, from the unzipped release, `npm install -g .` both yield the same version without network access to the repository.
 
 - **CAP-2**
   - **intent:** A guided first run takes a newcomer from install to a working bridge without editing any file by hand: prerequisites are checked, the Signal device is linked by QR in the terminal, a valid configuration is written, the opencode plugin is installed, and the loop is proven by one real message.
@@ -40,7 +40,10 @@ sources: []
 
 ## Constraints
 
-- Node ≥ 20, and no native build dependency anywhere on the install path.
+- Node ≥ 22.13, and no native build dependency anywhere on the install path. The floor is set by the
+  store, not by taste: `src/store/sqliteDriver.ts:26` requires `node:sqlite` at module scope and
+  `src/index.ts` imports the store, so older runtimes fail before the CLI can answer anything. The
+  module exists from 22.5.0 and is unflagged from 22.13.0/23.4.0 (nodejs/node#55890).
 - Signal access stays a *linked secondary device*: the operator scans a QR with their own phone. There is no bot number and no API-token route.
 - Java and signal-cli stay external prerequisites, detected and fetched per platform, never bundled or vendored — the pattern `install-signal-cli.ps1` and `ensure-java.ps1` already establish.
 - The package publishes as `signal-connector` from a public repository under the **MIT** license. The name is free on the public registry and `package.json` is `private: true` with no license today, so both change.
@@ -63,4 +66,4 @@ A person who has never seen this repository goes from nothing to sending `/proje
 
 ## Assumptions
 
-- The newcomer has Node ≥ 20, an opencode installation, a Signal account with a phone for linking, and is willing to use a terminal.
+- The newcomer has Node ≥ 22.13, an opencode installation, a Signal account with a phone for linking, and is willing to use a terminal.

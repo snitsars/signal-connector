@@ -40,7 +40,7 @@ The numbered source is the spec in this folder; it owns the ids.
 
 ## Done when
 
-1. A machine with only Node ≥ 20 installs the published package or the release zip and
+1. A machine with only Node ≥ 22.13 installs the published package or the release zip and
    `signal-connector --version` prints the package version, on Windows, macOS and Linux.
 2. On a clean machine, the guided first run links a Signal device, writes configuration,
    installs the plugin, and ends with a numbered command in Signal answered in the configured
@@ -66,7 +66,7 @@ non-goals are this epic's non-goals.
 - parent — _bmad-output/initiative-signal-connector/initiative-signal-connector.md
 - spec — spec-distribution/spec-distribution.md (capability ids this epic owns)
 - spec — spec-distribution/install-paths.md (channels, prerequisites, platform notes)
-- constraint — AGENTS.md, Conventions (Node ≥ 20, no native build dependency)
+- constraint — AGENTS.md, Conventions (no native build dependency; its Node floor line still says ≥ 20 and needs correcting — see the deferred entry)
 - constraint — architecture-signal-connector/architecture-signal-connector.md, AD-9 (secrets never in the repo or a log line) and AD-1 (core imports no adapter)
 - constraint — prd-signal-connector/prd-signal-connector.md, TC1 (linking is a QR device link; there is no bot account)
 
@@ -78,8 +78,17 @@ non-goals are this epic's non-goals.
 - Decision: the tracer bullet is entry 1 (2026-10-15). `npm pack` → install the tarball → run
   `--version` cuts through manifest, build output, bin wiring and CLI parsing, proving they
   connect before anything else is built, and needs no registry account.
-- Assumption: the newcomer has Node ≥ 20, opencode, a Signal account with a phone, and a terminal
+- Assumption: the newcomer has Node ≥ 22.13, opencode, a Signal account with a phone, and a terminal
   (spec, still assumed).
+- Decision: the Node floor is 22.13, not 20 (2026-10-15). Building entry 1 disproved the original
+  floor: `src/store/sqliteDriver.ts:26` requires `node:sqlite` at module scope, `src/index.ts`
+  imports the store, and on Node 20 that import dies with ERR_UNKNOWN_BUILTIN_MODULE before the new
+  argument gate runs — reproduced by running `dist/index.js --version` under the Node 18 on this
+  machine. `node:sqlite` exists from 22.5.0 and is unflagged from 22.13.0/23.4.0 (nodejs/node#55890),
+  so `engines.node` is `>= 22.13.0` and the spec constraint now says 22.13. AGENTS.md still says 20.
+- Decision: the source repository is public at `github.com/snitsars/signal-connector` (2026-10-15),
+  created for this sprint and set as `origin`; `package.json` carries `repository` and `bugs`. Nothing
+  is pushed yet — the first push is the user's call.
 - Decision: keep the npm name `signal-connector` (2026-10-15). The registry returned 404 for it,
   and for `opencode-signal-connector` and `signal-connector-cli`; `opencode-signal` is taken by an
   unrelated package. No scope is needed.
