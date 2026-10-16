@@ -48,6 +48,30 @@ async function main(): Promise<void> {
     file: path.join(dir, "logs", "signal-connector.log"),
   });
 
+  // Bind the bridge port before anything else. That port is this service's
+  // single-instance lock: a second instance must stop here, because if it
+  // carries on it adopts the same signal-cli daemon and its own `receive` loop
+  // competes with ours, which wedges the daemon's message intake.
+  const hub = new BridgeHub();
+  hub.onDiag((projectId, detail) => logger.warn("plugin diagnostic", { project: projectId, detail }));
+  const bridge = startBridgeServer(hub, {
+    host: config.bridge.host,
+    port: config.bridge.port,
+    logger,
+  });
+  try {
+    await bridge.ready;
+  } catch (err: unknown) {
+    logger.error("another SignalConnector is already running on this port; exiting", {
+      port: config.bridge.port,
+      error: String(err),
+    });
+    // The file logger writes asynchronously; without this pause the reason for
+    // exiting is lost with the process and the log shows nothing at all.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    process.exit(1);
+  }
+
   const store = openStore(path.join(dir, "state.db"));
   const secrets = defaultSecretStore(dir);
 
@@ -74,15 +98,11 @@ async function main(): Promise<void> {
         logger,
       })
     : undefined;
-  if (daemon) await daemon.start();
-
-  const hub = new BridgeHub();
-  hub.onDiag((projectId, detail) => logger.warn("plugin diagnostic", { project: projectId, detail }));
-  const bridge = startBridgeServer(hub, {
-    host: config.bridge.host,
-    port: config.bridge.port,
-    logger,
+  // A daemon that stopped serving `receive` is replaced, not waited for.
+  signal.onUnhealthy((reason) => {
+    void daemon?.restart(reason);
   });
+  if (daemon) await daemon.start();
 
   const agent = await createAgentAdapter(config, logger, hub);
 

@@ -13,7 +13,18 @@ export interface BridgeServerOptions {
   logger: Logger;
 }
 
-export function startBridgeServer(hub: BridgeHub, opts: BridgeServerOptions): WebSocketServer {
+export interface BridgeServer {
+  /**
+   * Resolves once the port is bound, rejects on the first error. The bridge port
+   * is also this service's single-instance lock: a second instance cannot bind
+   * it and must exit instead of adopting the signal-cli daemon, because two
+   * clients calling `receive` on a daemon in manual receive mode wedge it.
+   */
+  ready: Promise<void>;
+  close(): void;
+}
+
+export function startBridgeServer(hub: BridgeHub, opts: BridgeServerOptions): BridgeServer {
   const wss = new WebSocketServer({ host: opts.host, port: opts.port });
 
   wss.on("connection", (socket: WebSocket) => {
@@ -48,7 +59,17 @@ export function startBridgeServer(hub: BridgeHub, opts: BridgeServerOptions): We
     socket.on("error", (err) => opts.logger.warn("bridge socket error", { error: String(err) }));
   });
 
-  wss.on("listening", () => opts.logger.info("bridge listening", { host: opts.host, port: opts.port }));
+  // readiness: the caller awaits this to fail fast when the port is taken
+  const ready = new Promise<void>((resolve, reject) => {
+    wss.once("listening", () => {
+      opts.logger.info("bridge listening", { host: opts.host, port: opts.port });
+      resolve();
+    });
+    wss.once("error", (err: unknown) => {
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+
   wss.on("error", (err) => opts.logger.error("bridge server error", { error: String(err) }));
-  return wss;
+  return { ready, close: () => wss.close() };
 }

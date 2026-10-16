@@ -152,6 +152,10 @@ export interface SignalCliOptions {
   /** Where inbound attachments are written. Defaults to the OS temp dir. */
   mediaDir?: string;
   pollIntervalMs?: number;
+  /** Hard limit for one `receive` call, ms. A wedged daemon answers `version` forever but never this. */
+  receiveTimeoutMs?: number;
+  /** Consecutive receive failures after which the daemon is reported unhealthy. */
+  unhealthyAfter?: number;
   minIntervalMs?: number;
   maxPerMinute?: number;
   logger: Logger;
@@ -198,6 +202,9 @@ export class SignalCliClient implements SignalPort {
   private messageHandlers: ((m: IncomingMessage) => void)[] = [];
   private reactionHandlers: ((r: Reaction) => void)[] = [];
   private pollVoteHandlers: ((v: PollVote) => void)[] = [];
+  private unhealthyHandlers: ((reason: string) => void)[] = [];
+  private receiveFailures = 0;
+  private reportedUnhealthy = false;
   private timer: NodeJS.Timeout | undefined;
   private running = false;
   private rpcId = 0;
@@ -209,6 +216,8 @@ export class SignalCliClient implements SignalPort {
     this.opts = {
       mediaDir: path.join(os.tmpdir(), "signal-connector-media"),
       pollIntervalMs: 2000,
+      receiveTimeoutMs: 15_000,
+      unhealthyAfter: 2,
       minIntervalMs: 1500,
       maxPerMinute: 20,
       ...options,
@@ -219,12 +228,19 @@ export class SignalCliClient implements SignalPort {
     });
   }
 
-  private async rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  private async rpc<T>(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs = 60_000,
+  ): Promise<T> {
     const id = ++this.rpcId;
     const response = await fetch(this.opts.endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      // Without this, a wedged daemon holds the call for undici's five-minute
+      // timeout, which hides the failure and delays recovery.
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const body = (await response.json()) as RpcResponse<T>;
     if (body.error) {
@@ -238,12 +254,24 @@ export class SignalCliClient implements SignalPort {
     const tick = async (): Promise<void> => {
       if (!this.running) return;
       try {
-        const envelopes = await this.rpc<Envelope[]>("receive", {
-          timeout: 1,
-        });
+        const envelopes = await this.rpc<Envelope[]>(
+          "receive",
+          { timeout: 1 },
+          this.opts.receiveTimeoutMs,
+        );
+        this.receiveFailures = 0;
+        this.reportedUnhealthy = false;
         for (const env of envelopes ?? []) await this.dispatch(env);
       } catch (err) {
-        this.opts.logger.warn("signal receive failed", { error: String(err) });
+        this.receiveFailures += 1;
+        this.opts.logger.warn("signal receive failed", {
+          error: String(err),
+          failures: this.receiveFailures,
+        });
+        if (this.receiveFailures >= this.opts.unhealthyAfter && !this.reportedUnhealthy) {
+          this.reportedUnhealthy = true;
+          for (const h of this.unhealthyHandlers) h(String(err));
+        }
       } finally {
         if (this.running) {
           this.timer = setTimeout(() => void tick(), this.opts.pollIntervalMs);
@@ -507,5 +535,13 @@ export class SignalCliClient implements SignalPort {
 
   onPollVote(handler: (v: PollVote) => void): void {
     this.pollVoteHandlers.push(handler);
+  }
+
+  /**
+   * Called once per outage when `receive` keeps failing: the daemon is up but
+   * not serving, so it has to be replaced rather than waited for.
+   */
+  onUnhealthy(handler: (reason: string) => void): void {
+    this.unhealthyHandlers.push(handler);
   }
 }

@@ -22,6 +22,8 @@ export interface DaemonOptions {
   logger: Logger;
   /** Delay before an automatic restart, ms. */
   restartDelayMs?: number;
+  /** How long to wait for the port to be released after killing the daemon, ms. */
+  stopTimeoutMs?: number;
 }
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -44,10 +46,13 @@ export function rpcEndpoint(host: string, port: number): string {
 export class SignalCliDaemon {
   private child: ChildProcess | undefined;
   private stopping = false;
+  private restarting = false;
   private readonly restartDelayMs: number;
+  private readonly stopTimeoutMs: number;
 
   constructor(private readonly opts: DaemonOptions) {
     this.restartDelayMs = opts.restartDelayMs ?? 2000;
+    this.stopTimeoutMs = opts.stopTimeoutMs ?? 10_000;
   }
 
   endpoint(): string {
@@ -60,11 +65,64 @@ export class SignalCliDaemon {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "version", params: {} }),
+        // A daemon whose Signal connection died can still accept the connection
+        // and say nothing, so never wait on it for longer than a moment.
+        signal: AbortSignal.timeout(5000),
       });
       return true;
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Replace the daemon process. A daemon whose connection to Signal is gone keeps
+   * answering `version` while `receive` never returns, and it never exits on its
+   * own, so the only cure is a new process. Called by the receive watchdog.
+   */
+  async restart(reason: string): Promise<void> {
+    if (this.restarting) {
+      this.opts.logger.info("signal-cli restart already in progress");
+      return;
+    }
+    if (!this.child) {
+      this.opts.logger.error(
+        "signal-cli daemon is not answering and this service did not start it; " +
+          "stop the process listening on its port and restart SignalConnector",
+        { host: this.opts.host, port: this.opts.port, reason },
+      );
+      return;
+    }
+    this.restarting = true;
+    try {
+      this.opts.logger.warn("restarting signal-cli daemon", {
+        reason,
+        pid: this.child.pid,
+      });
+      this.stopping = true;
+      this.child.kill();
+      this.child = undefined;
+      if (!(await this.waitForPortFree())) {
+        this.opts.logger.error("signal-cli daemon did not release its port", {
+          host: this.opts.host,
+          port: this.opts.port,
+        });
+        return;
+      }
+      await this.start();
+      this.opts.logger.info("signal-cli daemon restarted", { reason });
+    } finally {
+      this.restarting = false;
+    }
+  }
+
+  private async waitForPortFree(): Promise<boolean> {
+    const attempts = Math.ceil(this.stopTimeoutMs / 500);
+    for (let i = 0; i < attempts; i++) {
+      if (!(await this.isReachable())) return true;
+      await delay(500);
+    }
+    return false;
   }
 
   async start(): Promise<void> {

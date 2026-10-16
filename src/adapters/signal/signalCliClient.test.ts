@@ -1,5 +1,14 @@
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
-import { attachmentData, inboundMedia, mediaFileName, pollVoteFrom } from "./signalCliClient.js";
+import { createLogger } from "../../logging/logger.js";
+import {
+  attachmentData,
+  inboundMedia,
+  mediaFileName,
+  pollVoteFrom,
+  SignalCliClient,
+} from "./signalCliClient.js";
 import { isGroupId, quoteParams, targetParams } from "./signalCliClient.js";
 
 describe("targetParams", () => {
@@ -122,5 +131,45 @@ describe("pollVoteFrom", () => {
   it("ignores a vote that does not name the poll", () => {
     expect(pollVoteFrom({ optionIndexes: [0] }, "+1000", 5)).toBeUndefined();
     expect(pollVoteFrom(undefined, "+1000", 5)).toBeUndefined();
+  });
+});
+
+describe("receive watchdog", () => {
+  it("reports a wedged daemon unhealthy, once per outage", async () => {
+    // The daemon this incident was about: `version` answers at once, `receive`
+    // never answers at all.
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const call = JSON.parse(body) as { id: number; method: string };
+        if (call.method === "receive") return; // held open forever
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: call.id, result: { version: "0.14.9" } }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    const client = new SignalCliClient({
+      endpoint: `http://127.0.0.1:${port}/api/v1/rpc`,
+      account: "+1000",
+      channelId: "self",
+      pollIntervalMs: 10,
+      receiveTimeoutMs: 40,
+      unhealthyAfter: 2,
+      logger: createLogger({ level: "error", console: false }),
+    });
+    const reasons: string[] = [];
+    client.onUnhealthy((reason) => reasons.push(reason));
+
+    await client.start();
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await client.stop();
+    server.closeAllConnections();
+    server.close();
+
+    expect(reasons).toHaveLength(1);
+    expect(reasons[0]).toMatch(/timeout/i);
   });
 });
