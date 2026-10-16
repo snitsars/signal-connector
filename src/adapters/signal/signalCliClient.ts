@@ -10,6 +10,7 @@ import { styleParam, type StyleRange } from "../../core/format.js";
 import type { QuoteRef, SendOptions, SignalPort } from "../../core/ports.js"
 import type { IncomingMessage, OutgoingMessage, PollVote, Reaction } from "../../domain/types.js";
 import type { Logger } from "../../logging/logger.js";
+import { splitStyled } from "../../core/format.js";
 import { RateLimiter } from "./rateLimiter.js";
 import fs from "node:fs";
 import os from "node:os";
@@ -422,6 +423,26 @@ export class SignalCliClient implements SignalPort {
   }
 
   async send(channelId: string, text: string, options?: SendOptions): Promise<OutgoingMessage> {
+    // Long answers are cut into numbered parts: sent whole, signal-cli turns
+    // them into a "long text attachment" that the server rejects, and the
+    // operator sees nothing at all.
+    const parts = splitStyled(text, options?.styles ?? []);
+    let sent: OutgoingMessage | undefined;
+    for (const part of parts) {
+      sent = await this.sendPart(channelId, part.text, {
+        ...options,
+        styles: part.styles,
+      });
+    }
+    if (!sent) throw new Error("nothing to send");
+    return sent;
+  }
+
+  private async sendPart(
+    channelId: string,
+    text: string,
+    options?: SendOptions,
+  ): Promise<OutgoingMessage> {
     await this.limiter.acquire();
     this.opts.logger.debug("signal send", { text });
     const result = await this.rpc<{ timestamp?: number }>("send", {

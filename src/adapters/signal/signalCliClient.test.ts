@@ -134,6 +134,51 @@ describe("pollVoteFrom", () => {
   });
 });
 
+describe("long messages", () => {
+  it("sends a long answer as numbered parts and returns the last id", async () => {
+    const sent: { message?: string }[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const call = JSON.parse(body) as { id: number; method: string; params: { message?: string } };
+        if (call.method === "send") sent.push(call.params);
+        res.setHeader("content-type", "application/json");
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: call.id,
+            result: { timestamp: 1792000000000 + sent.length },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+
+    const client = new SignalCliClient({
+      endpoint: `http://127.0.0.1:${port}/api/v1/rpc`,
+      account: "+1000",
+      channelId: "self",
+      minIntervalMs: 1,
+      logger: createLogger({ level: "error", console: false }),
+    });
+
+    // 3000 characters: signal-cli would turn this into an attachment the server
+    // refuses, so it has to arrive as parts.
+    const answer = "word ".repeat(600).trim();
+    const last = await client.send("self", answer);
+    server.closeAllConnections();
+    server.close();
+
+    expect(sent.length).toBeGreaterThan(1);
+    expect(sent[0]!.message?.startsWith(`(1/${sent.length}) `)).toBe(true);
+    const rejoined = sent.map((s) => s.message!.replace(/^\(\d+\/\d+\) /, "")).join("");
+    expect(rejoined).toBe(answer);
+    expect(last.messageId).toBe(String(1792000000000 + sent.length));
+  });
+});
+
 describe("receive watchdog", () => {
   it("reports a wedged daemon unhealthy, once per outage", async () => {
     // The daemon this incident was about: `version` answers at once, `receive`
