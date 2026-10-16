@@ -5,7 +5,7 @@ type: epic
 title: "Talk to the agent in a meeting room, with a face"
 parent: initiative-signal-connector
 covers: ["CAP-1", "CAP-2", "CAP-3", "CAP-4", "CAP-5", "CAP-6", "CAP-8"]
-after: [{ epic = 4, needs = "the command router, the project channel mapping and the session binding" }]
+after: []   # the epic-level gate lives in the initiative's tickets.toml
 assignee: ""
 risk: high
 ---
@@ -102,9 +102,10 @@ no captions, no recording, no hosted bot or voice service.
   acknowledgement as an outbound liveness probe ships after the voice loop (2026-10-17).
 - Decision: this epic is built before epic 6 (distribution) finishes, at the operator's
   request; nothing in it waits on epic 6 (2026-10-17).
-- Waits on epic 4 because: the `/meet` command, the project-to-channel mapping and the
-  session binding are the command router's, already in production; epics 2 and 3 are reached
-  through it, so one gate covers the chain.
+- Decision: this epic carries no gate. It consumes what is already in production — the
+  `/meet` command, the project-to-channel mapping and the session binding from epic 4, and
+  through it the Signal port of epic 2 and the agent port of epic 3 — so `after` is empty and
+  a gate would only name work that is already done (2026-10-17).
 - Assumption: the operator's machine can run a visible Chromium window and fetch a small
   transcription model, the way signal-cli is fetched.
 - Unknown: whether the operator's account settings admit an anonymous guest who knocks;
