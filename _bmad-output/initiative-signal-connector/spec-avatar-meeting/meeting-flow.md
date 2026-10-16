@@ -1,33 +1,38 @@
 # Meeting flow
 
-Companion to `spec-avatar-meeting.md`. The commands, the room, the end-to-end sequence,
-what happens when a step fails, and the budgets.
+Companion to `spec-avatar-meeting.md`: the commands, the gate that decides whether a
+paste is honoured, the sequence, what happens when a step fails, and the budgets.
 
 ## Commands, in a project's Signal group
 
 | Command | Effect |
 |---|---|
-| `/meet` | Post the room link and join as this project's avatar. |
-| `/meet stop` | Leave the room and free the slot. |
-| `/meet <link>` | Join a different room once, without changing the configuration. |
+| `/meet <link>` | Accept the link for this project, join the room as the avatar. |
+| `/meet stop` | Leave the room, wipe the credential, free the slot. |
 
-`/meet` is a command, never a task: plain text in the group stays a prompt, exactly as
-today. One meeting at a time, whichever project asks. The group is the record, so the
-link, the join status and the outcome are posted there and nowhere else.
+There is no bare `/meet` and no configured room: the link the operator pastes *is* the
+summon and the authorisation. One meeting at a time, whichever project asks. The group is
+the record, so the notice, the refusals and the summary are posted there and nowhere else.
 
-## The room
+## The gate
 
-The room is configuration, not something the connector makes: `meet.room` in
-`config.toml` holds the link, created once by the operator by hand. That is what keeps
-this spec free of Google credentials, Cloud projects and API scopes — joining a room
-needs none of them, so the rejoin path works with no authentication at all. The nearest
-alternative, a room created per request, would need OAuth and a client secret for a
-feature nobody asked for twice.
+A paste is honoured only when all of these hold; each failure has its own named refusal,
+decided **before** anything joins.
 
-The avatar is named after the project, so the participant list says who is talking. A
-per-project picture is not possible: the room takes it from the account that joins.
+| Check | Accepts | Refuses as |
+|---|---|---|
+| Sender | the configured identity for this project, resolved as (source path, sender): on the sync path the sender is the channel and counts as the operator's own linked device; on the data path it matches the number or ACI | not authorised (a different answer from unknown) |
+| Shape | `https`, a canonical room link for an allow-listed provider host, alive by a pre-join probe | malformed link, foreign provider, room ended |
+| Slot | nothing else open | already running under `<project>`, started `<time>` |
 
-## Sequence
+The claim *is* the write: validation and the single-meeting claim are one store write,
+committed before any browser opens.
+
+The claim keys on the open meeting, not on the URL, so pasting the same link twice is one
+paste and one refusal. A room carries no project identity: which project the meeting
+belongs to is decided by the channel the link arrived in.
+
+## The sequence
 
 ```mermaid
 sequenceDiagram
@@ -37,67 +42,52 @@ sequenceDiagram
   participant G as Meeting room
   participant A as Project agent session
 
-  Op->>S: /meet
-  C->>S: the room link, and who is joining
-  C->>G: join in a visible browser window
-  Note over C,G: canvas as camera, synthesis as microphone
+  Op->>G: creates a room by hand, knocking on
+  Op->>S: /meet <link>
+  C->>C: resolve the sender, parse the link, probe it, claim the slot
+  C->>S: notice: joining as <project>
+  C->>G: join as an anonymous guest
   G-->>Op: admit the participant
-  C->>A: greet with the current task state
+  C->>A: attach the session, greet with the current task state
   Op->>G: speaks
-  G->>C: meeting audio
-  C->>C: local transcription
+  G->>C: room audio
+  C->>C: energy gate, then local transcription
   C->>A: prompt in the same session
   A-->>C: answer
   C->>G: synthesised speech and the avatar state
-  C-->>S: a waiting permission is announced aloud
-  Op->>S: /approve (the text path, unchanged)
+  Note over C,G: no voice becomes a command, an approval or a stop
+  Op->>S: /approve — the only authenticated channel
   C->>A: permission decision
   Op->>S: /meet stop
   C->>G: leave
+  C->>C: wipe the credential, free the slot
   C->>S: one summary message
 ```
 
-## Interruption
-
-```mermaid
-stateDiagram-v2
-  [*] --> Active: /meet
-  Active --> Interrupted: service restart, browser crash, machine wake
-  Interrupted --> Active: rejoin once, inside the activity window
-  Interrupted --> Closed: window passed, or the room refused the join
-  Active --> Closed: /meet stop, or the operator leaves
-  Closed --> [*]
-```
-
-The meeting lives in the store (project, room, started at, last activity), because the
-runtime rule is that state must be rebuildable from the database. On startup, or when
-the browser window dies, the connector rejoins once if the meeting was active within
-thirty minutes, says so in the group, and carries on. The conversation is not resumed
-mid-sentence: the avatar returns and listens.
-
-## Lifecycle and failure modes
+## Failure modes
 
 | Situation | Behaviour |
 |---|---|
-| No room configured | Refuse and say which configuration key is missing. |
-| A meeting is already running | Refuse, naming the project that holds it and when it started. |
-| Nobody admits the avatar | Wait for the admit budget, then leave and report "not admitted" in the group. |
-| The room no longer exists | Report it, free the slot, and wait for a `/meet <link>` or a configuration change. |
-| The provider changes its join UI | The join fails: leave, report that the join needs a look, and keep the text loop working. |
-| Service restart, browser crash, machine wake | Rejoin once inside the activity window (CAP-7). |
-| Window passed while nobody was there | Stay closed, and say so in the group. |
-| The operator leaves the room | Treated as `/meet stop`: leave, free the slot, post the summary. |
-| A permission is requested | Announced aloud and in the group; the decision is typed in Signal (text-only, see the kernel). |
+| No link, malformed link, foreign provider | Named refusal before anything joins. |
+| Link from another sender, or from a group member | Named "not authorised" refusal; no silent drop, and the refusal never quotes the link. |
+| Room already ended | Named refusal; the slot is never claimed. |
+| Another meeting is open | Refusal naming the holding project and when it started. |
+| Nobody admits the avatar | Leave after the admit budget and post "not admitted". |
+| The room goes silent while admitted | The deaf alarm (see the kernel's CAP-8) posts in the group by the next poll; presence is reported as someone here, nobody visible or cannot tell. |
+| The provider changes its join UI | Leave, post that the join needs a look, and keep the text loop working. |
+| A permission is requested | Announced aloud and in the group; the decision is typed in Signal. |
+| The operator leaves, or `/meet stop` | Leave, wipe the credential, free the slot, post one summary. A task still running keeps its row so its summary still lands. |
+| Any declared guard fails | It posts in the group or raises a health signal. A guard that can fail quietly is a habit, not a guard. |
+| A restart or a browser death mid-meeting | No rejoin in this slice: the credential is wiped, the slot is freed, the group is told. |
 
 ## Budgets
 
 | Step | Budget |
 |---|---|
-| Link posted after `/meet` | 2 s (it comes from configuration) |
+| Refusal or notice after the paste | 2 s |
 | Avatar visible in the room | 30 s (includes the operator admitting it) |
-| Back in the room after an interruption | 60 s |
-| Greeting once connected | 5 s |
+| Session attached and greeting | 5 s after admission |
 | Spoken acknowledgement of a question | 2 s |
 | Progress spoken while a task runs | At the milestones Signal already receives |
+| Silence alarm while admitted | One poll (5 s of no remote audio and no track change) |
 | Leave after stop | 5 s |
-| Activity window for a rejoin | 30 min since the last activity |
