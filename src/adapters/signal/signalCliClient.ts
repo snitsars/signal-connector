@@ -33,6 +33,10 @@ interface SentMessage {
   reaction?: { emoji?: string; targetSentTimestamp?: number };
   pollVote?: { targetSentTimestamp?: number; optionIndexes?: number[] };
   attachments?: AttachmentRef[];
+  /** Set when the message edits an earlier one: an edit is not a new command. */
+  editTimestamp?: number;
+  /** Set when the message deletes an earlier one. */
+  remoteDelete?: { timestamp?: number } | number;
 }
 
 interface AttachmentRef {
@@ -56,6 +60,9 @@ interface Envelope {
     attachments?: AttachmentRef[];
     /** A poll the operator answered in the Signal app. */
     pollVote?: { targetSentTimestamp?: number; optionIndexes?: number[] };
+    /** Edits and deletions arrive as ordinary data messages carrying these. */
+    editTimestamp?: number;
+    remoteDelete?: { timestamp?: number } | number;
   };
   /** Note-to-Self messages from the linked phone arrive here. */
   syncMessage?: {
@@ -155,6 +162,8 @@ export interface SignalCliOptions {
   pollIntervalMs?: number;
   /** Hard limit for one `receive` call, ms. A wedged daemon answers `version` forever but never this. */
   receiveTimeoutMs?: number;
+  /** Where the sent-message timestamps live, so a restart keeps ignoring echoes. Defaults to the media dir. */
+  sentLogFile?: string;
   /** Consecutive receive failures after which the daemon is reported unhealthy. */
   unhealthyAfter?: number;
   minIntervalMs?: number;
@@ -212,6 +221,7 @@ export class SignalCliClient implements SignalPort {
   /** Timestamps of messages we sent, to ignore their Note-to-Self sync echo. */
   private readonly sentTimestamps = new Set<string>();
   private sentOrder: string[] = [];
+  private readonly sentLogFile: string;
 
   constructor(options: SignalCliOptions) {
     this.opts = {
@@ -219,10 +229,16 @@ export class SignalCliClient implements SignalPort {
       pollIntervalMs: 2000,
       receiveTimeoutMs: 15_000,
       unhealthyAfter: 2,
+      sentLogFile: "",
       minIntervalMs: 1500,
       maxPerMinute: 20,
       ...options,
     } as Required<Omit<SignalCliOptions, "logger">> & { logger: Logger };
+    this.sentLogFile =
+      this.opts.sentLogFile !== ""
+        ? this.opts.sentLogFile
+        : path.join(this.opts.mediaDir, "sent-timestamps.json");
+    this.loadSentLog();
     this.limiter = new RateLimiter({
       minIntervalMs: this.opts.minIntervalMs,
       maxPerMinute: this.opts.maxPerMinute,
@@ -354,6 +370,8 @@ export class SignalCliClient implements SignalPort {
         });
         return;
       }
+      // An edit or a deletion is not a new instruction, whoever made it.
+      if (data.editTimestamp !== undefined || data.remoteDelete !== undefined) return;
       const mediaPaths = await this.saveAttachments(data.attachments, sender, at);      const message: IncomingMessage = {
         id: String(at),
         channelId,
@@ -364,6 +382,7 @@ export class SignalCliClient implements SignalPort {
       };
       if (data.quote?.id != null) message.quoteId = String(data.quote.id);
       if (mediaPaths.length > 0) message.mediaPaths = mediaPaths;
+      if (!message.text && mediaPaths.length === 0) return;
       for (const h of this.messageHandlers) h(message);
       return;
     }
@@ -394,6 +413,9 @@ export class SignalCliClient implements SignalPort {
         });
         return;
       }
+      // An edit of an earlier message (ours or the operator's) is not a command;
+      // treating it as one made the connector answer its own edits.
+      if (sent.editTimestamp !== undefined || sent.remoteDelete !== undefined) return;
       const media = inboundMedia(env);
       const mediaPaths = media ? await this.saveAttachments(media.attachments, media.sender, at) : [];
       const message: IncomingMessage = {
@@ -405,6 +427,7 @@ export class SignalCliClient implements SignalPort {
         inControlChannel: this.isControlChannel(channelId),
       };
       if (mediaPaths.length > 0) message.mediaPaths = mediaPaths;
+      if (!message.text && mediaPaths.length === 0) return;
       for (const h of this.messageHandlers) h(message);
     }
   }
@@ -471,13 +494,16 @@ export class SignalCliClient implements SignalPort {
     options?: SendOptions,
   ): Promise<void> {
     await this.limiter.acquire();
-    await this.rpc("send", {
+    const result = await this.rpc<{ timestamp?: number }>("send", {
       ...this.targetFor(channelId),
       message: text,
       editTimestamp: Number(messageId),
       ...this.quotesFor(options?.quote),
       ...this.stylesFor(options?.styles),
     });
+    // The daemon echoes an edit like any other send, so remember it too:
+    // otherwise the edited text comes back as a fresh command.
+    this.rememberSent(result.timestamp);
   }
 
   /**
@@ -543,6 +569,37 @@ export class SignalCliClient implements SignalPort {
     if (this.sentOrder.length > 100) {
       const oldest = this.sentOrder.shift();
       if (oldest) this.sentTimestamps.delete(oldest);
+    }
+    this.saveSentLog();
+  }
+
+  /**
+   * Keep the sent timestamps on disk. A restart empties an in-memory set, and a
+   * daemon that comes back after an outage replays what it queued — including
+   * the sync echo of our own messages, which would then be run as commands.
+   * Best effort: a missing or unreadable file only costs that protection.
+   */
+  private saveSentLog(): void {
+    try {
+      fs.mkdirSync(path.dirname(this.sentLogFile), { recursive: true });
+      fs.writeFileSync(this.sentLogFile, JSON.stringify(this.sentOrder));
+    } catch (err) {
+      this.opts.logger.debug("could not persist sent timestamps", { error: String(err) });
+    }
+  }
+
+  private loadSentLog(): void {
+    try {
+      const raw = fs.readFileSync(this.sentLogFile, "utf8");
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      for (const entry of parsed.slice(-100)) {
+        const key = String(entry);
+        this.sentTimestamps.add(key);
+        this.sentOrder.push(key);
+      }
+    } catch {
+      // No file yet, or it was damaged: start with an empty set.
     }
   }
 

@@ -1,5 +1,8 @@
+import fs from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createLogger } from "../../logging/logger.js";
 import {
@@ -133,6 +136,105 @@ describe("pollVoteFrom", () => {
     expect(pollVoteFrom(undefined, "+1000", 5)).toBeUndefined();
   });
 });
+
+describe("echo guard", () => {
+  /** A client wired to a server that hands out prepared envelopes. */
+  async function withEnvelopes(
+    run: (client: SignalCliClient, envelopes: unknown[], received: string[]) => Promise<void>,
+    sentLogFile = tempSentLog(),
+  ): Promise<void> {
+    const envelopes: unknown[] = [];
+    const server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        const call = JSON.parse(body) as { id: number; method: string };
+        const result =
+          call.method === "receive" ? envelopes.splice(0, envelopes.length) : { timestamp: 1792000000000 };
+        res.setHeader("content-type", "application/json");
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: call.id, result }));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    const received: string[] = [];
+    const client = new SignalCliClient({
+      endpoint: `http://127.0.0.1:${port}/api/v1/rpc`,
+      account: "+1000",
+      channelId: "self",
+      pollIntervalMs: 10,
+      sentLogFile: sentLogFile,
+      logger: createLogger({ level: "error", console: false }),
+    });
+    client.onMessage((m) => received.push(m.text));
+
+    try {
+      await run(client, envelopes, received);
+    } finally {
+      await client.stop();
+      server.closeAllConnections();
+      server.close();
+    }
+  }
+
+  it("never turns our own messages, edits or deletions into commands", async () => {
+    await withEnvelopes(async (client, envelopes, received) => {
+      const sent = await client.send("self", "Task 1234 done");
+      const at = Number(sent.messageId);
+      // Everything the daemon replays for our own account, plus one real command.
+      envelopes.push(
+        { envelope: { syncMessage: { sentMessage: { destinationNumber: "+1000", message: "Task 1234 done", timestamp: at } } } },
+        { envelope: { syncMessage: { sentMessage: { destinationNumber: "+1000", message: "edited answer", timestamp: at + 1, editTimestamp: at } } } },
+        { envelope: { syncMessage: { sentMessage: { destinationNumber: "+1000", timestamp: at + 2, remoteDelete: { timestamp: at } } } } },
+        { envelope: { syncMessage: { sentMessage: { destinationNumber: "+1000", timestamp: at + 3 } } } },
+        { envelope: { sourceNumber: "+2000", timestamp: at + 4, dataMessage: { message: "edited by hand", editTimestamp: at + 3 } } },
+        { envelope: { syncMessage: { sentMessage: { destinationNumber: "+1000", message: "Продовжуй", timestamp: at + 5 } } } },
+        { envelope: { sourceNumber: "+2000", timestamp: at + 6, dataMessage: { message: "run the tests" } } },
+      );
+      await client.start();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(received).toEqual(["Продовжуй", "run the tests"]);
+    });
+  });
+
+  it("keeps ignoring echoes that were sent before a restart", async () => {
+    const logFile = tempSentLog();
+
+    // First run: this send is what a restart would otherwise forget.
+    await withEnvelopes(async (first) => {
+      await first.send("self", "old answer");
+    }, logFile);
+
+    // Second run on the same log file: the daemon replays the echo of that send.
+    await withEnvelopes(async (client, envelopes, received) => {
+      envelopes.push({
+        envelope: {
+          syncMessage: {
+            sentMessage: { destinationNumber: "+1000", message: "old answer", timestamp: 1792000000000 },
+          },
+        },
+      });
+      await client.start();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(received).toEqual([]);
+    }, logFile);
+
+    expect(readSentLog(logFile)).toContain("1792000000000");
+  });
+});
+
+function tempSentLog(): string {
+  return path.join(os.tmpdir(), `sc-sent-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+}
+
+function readSentLog(file: string): string[] {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8")) as string[];
+  } catch {
+    return [];
+  }
+}
 
 describe("long messages", () => {
   it("sends a long answer as numbered parts and returns the last id", async () => {
