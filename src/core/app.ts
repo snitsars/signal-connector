@@ -527,7 +527,7 @@ export class CoreApp {
         updatedAt: this.now(),
       });
       const done = this.store.getTask(task.id)!;
-      await this.editStatus(done, event.summary);
+      await this.editStatus(done);
       await this.sendProject(done.projectId, summaryText(done));
       if (event.diffPath) {
         await this.signal.attach(this.channelFor(task.projectId), event.diffPath, "📄 Working diff");
@@ -542,7 +542,7 @@ export class CoreApp {
         updatedAt: this.now(),
       });
       const failed = this.store.getTask(task.id)!;
-      await this.editStatus(failed, event.text);
+      await this.editStatus(failed);
       await this.sendProject(failed.projectId, summaryText(failed));
       return;
     }
@@ -570,9 +570,18 @@ export class CoreApp {
     }
 
     this.store.updateTask(task.id, { state: "running", updatedAt: this.now() });
-    await this.editStatus(this.store.getTask(task.id)!, event.text ?? event.tool);
+    // Only progress goes into the status line. The assistant's text is NOT put
+    // here: the operator would then read the same answer twice, once in the
+    // status message and once in the completion message that follows it.
+    await this.editStatus(this.store.getTask(task.id)!, event.tool);
   }
 
+  /**
+   * Rewrite the task's one status message in place: blue while it works, green
+   * or red when it ends. `detail` is progress the operator may act on ("bash",
+   * "queued") — never the agent's own words, which belong to the completion
+   * message and would otherwise appear twice in the chat.
+   */
   private async editStatus(task: Task, detail?: string): Promise<void> {
     const messageId = this.store.getValue(`statusMsg:${task.id}`);
     const ownGroup = this.store.getChannel(task.projectId) !== undefined;

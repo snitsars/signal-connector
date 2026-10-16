@@ -730,6 +730,43 @@ describe("CoreApp", () => {
     expect(ctx.signal.sent.at(-1)?.text).toContain("Done");
   });
 
+  it("keeps the agent's words out of the status line, so the answer is read once", async () => {
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const taskId = ctx.agent.started[0]!.taskId;
+    const answer = "added a retry with backoff";
+
+    ctx.agent.emit({ type: "status", taskId, at: Date.now(), text: answer });
+    await tick();
+    ctx.agent.emit({ type: "idle", taskId, at: Date.now(), summary: answer });
+    await tick();
+
+    // The answer travels in one new completion message and nowhere else: a copy
+    // inside the status message made the operator read the same text twice.
+    const carrying = ctx.signal.ops.filter((op) => "text" in op && op.text.includes(answer));
+    expect(carrying.map((op) => op.op)).toEqual(["send"]);
+    const messages = ctx.signal.sent.filter((m) => m.text.includes(answer));
+    expect(messages).toHaveLength(1);
+    expect(messages[0]!.text).toContain("Done");
+  });
+
+  it("still shows the tool the agent is running in the status line", async () => {
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const taskId = ctx.agent.started[0]!.taskId;
+    const statusMsg = ctx.signal.sent.find((m) => m.text.includes("Task "))!;
+
+    ctx.agent.emit({ type: "tool", taskId, at: Date.now(), tool: "bash" });
+    await tick();
+
+    const edited = ctx.signal.sent.find((m) => m.messageId === statusMsg.messageId)!;
+    expect(edited.text).toContain("bash");
+  });
+
   it("resolves a permission via a reaction", async () => {
     ctx.signal.emitMessage(incoming("/open demo"));
     await tick();
