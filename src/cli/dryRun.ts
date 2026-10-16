@@ -174,34 +174,49 @@ async function main(): Promise<void> {
   await app.start();
 
   process.stdout.write(
-    "dry-run: type `/use demo` then `/task <prompt>`; answer with `approve`/`deny`. Ctrl+C exits.\n",
+    [
+      "dry-run: the console stands in for Signal. Type a command and press Enter:",
+      "  /open demo                     give the project its own group and open it",
+      "  then anything you type goes to that group as a task about the project",
+      "  approve | deny                 answer a permission prompt",
+      "Ctrl+C exits. `--demo` runs the whole sequence by itself.",
+      "",
+    ].join("\n"),
   );
 
-  const say = (text: string): void =>
+  /** Emit a message into a channel; the control channel is the default. */
+  const say = (text: string, channelId = "self", inControlChannel = true): void =>
     signal.emitMessage({
       id: String(Date.now()),
-      channelId: "self",
+      channelId,
       sender: "+0000",
       text,
       at: Date.now(),
-      inControlChannel: true,
+      inControlChannel,
     });
 
   if (process.argv.includes("--demo")) {
-    setTimeout(() => say("/use demo"), 200);
-    setTimeout(() => say("/task add a retry to the client"), 600);
-    setTimeout(() => say("approve"), 1800);
+    // The project's own group is where its tasks run, so the demo opens the
+    // group first and then talks in it — the flow the phone uses.
+    const group = "group-demo";
+    setTimeout(() => say("/open demo"), 200);
+    setTimeout(() => say("add a retry to the client", group, false), 900);
+    setTimeout(() => say("approve", group, false), 2000);
     setTimeout(() => {
       void app.stop().then(() => {
         store.close();
         process.exit(0);
       });
-    }, 3200);
+    }, 3600);
     return;
   }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  rl.on("line", (line) => say(line));
+  // Anything typed after /open demo belongs to that project's group.
+  rl.on("line", (line) => {
+    const group = store.getChannel("demo")?.channelId ?? "self";
+    say(line, group, group === "self");
+  });
   process.on("SIGINT", () => {
     void app.stop().then(() => {
       store.close();
