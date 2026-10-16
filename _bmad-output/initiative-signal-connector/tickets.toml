@@ -37,6 +37,12 @@ after = [
 ]
 
 [[epic]]
+id = 7
+slug = "epic-avatar-meeting"
+title = "Talk to the agent in a meeting room, with a face"
+covers = ["CAP-1", "CAP-2", "CAP-3", "CAP-4", "CAP-5", "CAP-6", "CAP-8"]
+
+[[epic]]
 id = 6
 slug = "epic-distribution"
 title = "A stranger can install SignalConnector and get a reply"

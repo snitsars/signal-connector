@@ -57,7 +57,8 @@ The session attaches on the authorised join, not on anything heard in the room.
 - While a task runs it speaks at the milestones the Signal group already receives.
 - Speech is published only when spoken to; when the operator starts speaking, the avatar
   stops talking. Full duplex with overlap resolution is out of scope for the first slice.
-- Both a spoken stop and the Signal stop command abort the running task.
+- The Signal stop command aborts the running task. A spoken stop does nothing: no voice in
+  the room is a command, and a transcription is only ever offered to the agent as a prompt.
 
 ## Tools to fetch
 

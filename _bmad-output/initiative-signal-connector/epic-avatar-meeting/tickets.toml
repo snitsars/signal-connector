@@ -1,0 +1,95 @@
+# tickets.toml — the children of epic-avatar-meeting, in build order.
+# tickets.py reads it. Table order is build order; `id` names an entry for good.
+# The spec in this folder owns the requirement ids: spec-avatar-meeting/spec-avatar-meeting.md
+
+[[entry]]
+id = 1
+type = "story"
+title = "Join a room as the avatar"
+description = "The `/meet <link>` command claims the one meeting slot and opens the room in a visible browser window as an anonymous guest, where an in-page canvas carries a drawn face in the project's colour language; the project session is attached and greeted with the current task state; `/meet stop` leaves and posts exactly one summary. It also owns the meeting port itself, keeping `src/core/` free of browser and audio imports, and the post-join failure branches: not admitted inside the admit budget, a changed join UI, and the operator leaving. The three unknowns this proves are browser automation, canvas-as-camera and anonymous admission."
+verify = "From a project's group, a pasted link puts the avatar in the room with a working three-colour face and a greeting from the same session, `/meet stop` leaves and posts one summary, and a room that never admits is left after the budget with a posted reason."
+covers = ["CAP-1", "CAP-2", "CAP-5", "CAP-6"]
+after = []
+hitl = true
+plan_checkpoint = true
+risk = "high"
+notes = ["The operator creates the room by hand and admits the guest — that step is the hitl part."]
+
+[[entry]]
+id = 2
+type = "story"
+title = "The gate that refuses before it joins"
+description = "Sender resolution as (source path, sender) against the configured identity, canonical https parse, provider host allow-list and a pre-join liveness probe, committed as one store write together with the single-meeting claim before the browser opens; the closed set of named refusals; and the credential wiped the instant the meeting stops being open."
+verify = "Each row of the spec's gate table is produced by its own case with nothing joining, a repeated paste loses the race and is told which project holds the slot, and the link appears in no log line, no refusal and no group message."
+covers = ["CAP-1", "CAP-5"]
+after = [1]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 3
+type = "story"
+title = "Hear the room and answer from the same session"
+description = "Copies the room audio inside the page into a local AnalyserNode, gates it by energy so a transcription over silence is dropped and counted, transcribes locally, and offers the result to the project session as a prompt — nothing heard is ever a command, an approval or a stop. It owns the voice port, so the browser and the model stay outside `src/core/`."
+verify = "A spoken question reaches the same session a typed question would, and a transcription whose audio never rose above the noise floor is dropped and counted instead of executed."
+covers = ["CAP-3"]
+after = [1]
+hitl = true
+risk = "high"
+notes = ["Fetching the transcription model is the hitl part."]
+
+[[entry]]
+id = 4
+type = "story"
+title = "Speak in the room"
+description = "Publishes locally synthesised speech into the room's microphone, acknowledges within the two-second budget, stays quiet until spoken to, and does not speak over the operator."
+verify = "The avatar's answer is heard in the room, the acknowledgement lands inside the budget, and it stays quiet until it is asked something."
+covers = ["CAP-3"]
+after = [3]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 5
+type = "story"
+title = "Announce permissions aloud, decide by text"
+description = "Announces a waiting permission in the room and in the project's group, keeps the decision on the typed Signal path, and refuses any spoken approval while saying why."
+verify = "A permission prompted during a meeting is announced aloud, granted by typing in Signal, obeyed by the agent, and a spoken approval changes nothing."
+covers = ["CAP-4"]
+after = [4]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 6
+type = "story"
+title = "Ears and presence, out loud"
+description = "The deaf alarm: no remote audio and no track-state change for the silence budget posts in the group by the next poll and raises a health signal. Presence is reported as someone here, nobody visible or cannot tell, with a named presence-unknown state when the list is unavailable — never an identity, never a block. A second human present makes the meeting listen-only, and the connector says so. Every stored active meeting reaches exactly one terminal outcome."
+verify = "With the avatar admitted, a muted room is reported within the next poll, presence reports its three outcomes, a second participant makes the meeting listen-only, and an active row left past the activity window surfaces as a hard failure rather than a log line."
+covers = ["CAP-8", "CAP-6", "CAP-4"]
+after = [3]
+hitl = false
+risk = "medium"
+
+[[entry]]
+id = 7
+type = "story"
+title = "Refactor sweep"
+description = "Set when it starts, from the plans and the review findings deferred during this epic; cleanup only."
+verify = "The suite is green and every deferred finding is either fixed or filed as its own ticket."
+covers = []
+after = [1, 2, 3, 4, 5, 6]
+hitl = false
+risk = "low"
+
+[[entry]]
+id = 8
+type = "story"
+title = "Closing end-to-end suite"
+description = "One end-to-end suite across the epic: the paste-to-summary path under fakes, plus a live smoke run the operator triggers."
+verify = "The suite fails if any Done-when check regresses — refusals, guest join, one summary, credential wipe, energy gate, deaf alarm, spoken-approval refusal."
+covers = ["CAP-1", "CAP-2", "CAP-3", "CAP-4", "CAP-5", "CAP-6", "CAP-8"]
+after = [7]
+hitl = true
+risk = "medium"
+notes = ["The live smoke run needs the operator in a room."]
