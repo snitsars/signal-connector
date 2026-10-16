@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Кімната проти кімнати — Code Review Crew, три сесії</title>
+<style>
+  :root{
+    --ink:#f3ede1; --dim:#a79f92; --bg:#0d1114; --panel:#141b20; --line:#232c33;
+    --vex:#7fb2ff; --grumbal:#ffb454; --boundary:#ff6b4a; --yui:#5fe0c5; --dana:#8bd97a;
+    --ok:#8bd97a; --bad:#ff6b6b; --chalk:#e9e4d8;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:
+      radial-gradient(1200px 600px at 50% -10%, #17222a 0%, transparent 60%),
+      var(--bg);
+    color:var(--ink);
+    font:16px/1.65 "Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    padding:0 18px 72px;
+  }
+  .wrap{max-width:1040px;margin:0 auto}
+  header{text-align:center;padding:56px 0 24px;position:relative}
+  .overline{font:600 12px/1 ui-sans-serif,system-ui;letter-spacing:.32em;text-transform:uppercase;color:var(--dim)}
+  h1{font-size:clamp(30px,5.4vw,54px);margin:14px 0 6px;letter-spacing:-.01em}
+  h1 em{font-style:normal;color:var(--vex)}
+  .sub{color:var(--dim);max-width:62ch;margin:0 auto}
+  .meta{margin-top:18px;font:500 12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--dim)}
+  .rule{height:1px;margin:30px auto 0;max-width:520px;background:linear-gradient(90deg,transparent,var(--line) 20%,var(--vex) 50%,var(--line) 80%,transparent);animation:slide 9s linear infinite;background-size:200% 1px}
+  @keyframes slide{from{background-position:200% 0}to{background-position:-200% 0}}
+
+  .face{display:block;margin:26px auto 0;width:150px;height:150px}
+  .eye{animation:blink 7s ease-in-out infinite}
+  .pupil-a{animation:look 11s ease-in-out infinite}
+  .mouth{animation:talk 6s ease-in-out infinite}
+  @keyframes blink{0%,92%,100%{transform:scaleY(1)}95%{transform:scaleY(.12)}}
+  @keyframes look{0%,45%,100%{transform:translateX(0)}60%,80%{transform:translateX(5px)}}
+  @keyframes talk{0%,100%{d:path("M60 104 Q75 114 90 104")}50%{d:path("M60 104 Q75 122 90 104")}}
+  .state-ok{animation:glow 5s ease-in-out infinite}
+  @keyframes glow{0%,100%{opacity:.15}50%{opacity:.55}}
+
+  section{margin-top:56px}
+  h2{font-size:13px;letter-spacing:.28em;text-transform:uppercase;color:var(--dim);font-family:ui-sans-serif,system-ui;font-weight:700;margin:0 0 18px;display:flex;align-items:center;gap:12px}
+  h2:after{content:"";flex:1;height:1px;background:var(--line)}
+
+  .cast{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 16px 14px;position:relative;overflow:hidden;animation:up .7s ease both}
+  .card:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:var(--who)}
+  .card .ico{font-size:22px}
+  .card .nm{font-weight:700;margin-top:6px}
+  .card .ttl{font:600 11px/1.4 ui-sans-serif,system-ui;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);margin-bottom:10px}
+  .card .q{font-size:14.5px;color:var(--chalk);font-style:italic}
+  @keyframes up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+  .sess{border-left:2px dashed var(--line);margin-left:10px;padding:2px 0 8px 26px;position:relative}
+  .sess .tag{position:absolute;left:-13px;top:0;width:24px;height:24px;border-radius:50%;background:var(--bg);border:2px solid var(--line);display:grid;place-items:center;font:700 12px/1 ui-sans-serif,system-ui;color:var(--dim)}
+  .sess h3{margin:6px 0 4px;font-size:20px}
+  .sess .lead{color:var(--dim);margin:0 0 16px}
+  .turn{display:grid;grid-template-columns:34px 1fr;gap:12px;margin:0 0 12px}
+  .turn .who{font-family:ui-sans-serif,system-ui;font-size:20px;text-align:center}
+  .turn .bub{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--who);border-radius:0 12px 12px 12px;padding:11px 14px}
+  .turn .n{font:700 12px/1 ui-sans-serif,system-ui;letter-spacing:.1em;text-transform:uppercase;color:var(--who);display:block;margin-bottom:5px}
+  .turn.hit .bub{background:#1b1416;border-color:#3a2426}
+  .turn.me .bub{background:#121a17;border-left-color:var(--ok)}
+  .turn.me .n{color:var(--ok)}
+
+  .board{background:#111a17;border:1px solid #24322c;border-radius:14px;padding:22px;font-family:"Bradley Hand","Segoe Print","Comic Sans MS",ui-rounded,cursive;color:var(--chalk);font-size:17px;line-height:2.1}
+  .board s{color:#7c8b84;text-decoration-thickness:2px}
+  .board b{color:var(--ok);font-weight:600}
+  .board .q{color:#ffd08a}
+
+  .two{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+  .col{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .col.yes{border-color:#27402f}
+  .col.no{border-color:#3f2626}
+  .col h3{margin:0 0 12px;font:700 12px/1 ui-sans-serif,system-ui;letter-spacing:.2em;text-transform:uppercase}
+  .col.yes h3{color:var(--ok)} .col.no h3{color:var(--bad)}
+  ul{margin:0;padding-left:18px} li{margin:0 0 8px}
+  .no li{color:#c9b3b3;text-decoration:line-through;text-decoration-color:#7d4a4a}
+
+  footer{margin-top:64px;border-top:1px solid var(--line);padding-top:20px;color:var(--dim);font:500 12.5px/1.9 ui-monospace,SFMono-Regular,Consolas,monospace}
+  footer b{color:var(--ink)}
+  .deaf{margin-top:26px;text-align:center;color:var(--dim);font-style:italic}
+  .deaf span{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--bad);margin-right:8px;animation:glow 2.6s ease-in-out infinite;vertical-align:middle}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="overline">Code Review Crew &middot; три сесії &middot; 16–17 жовтня 2026</div>
+  <h1>Кімната проти <em>кімнати</em></h1>
+  <p class="sub">П'ять голосів розбирали специфікацію аватар-мітингу: ти вставляєш лінк у групі проєкту, конектор заходить у кімнату намальованим обличчям і говорить із тобою про твою задачу. Кімната знайшла двадцять дірок і поховала половину власних пропозицій.</p>
+
+  <svg class="face" viewBox="0 0 150 150" role="img" aria-label="Намальоване обличчя аватара">
+    <circle cx="75" cy="76" r="56" fill="none" stroke="#e9e4d8" stroke-width="3" stroke-dasharray="5 4"/>
+    <circle class="state-ok" cx="75" cy="76" r="48" fill="#5fe0c5" opacity=".08"/>
+    <g class="eye">
+      <circle cx="57" cy="66" r="12" fill="#12181c" stroke="#e9e4d8" stroke-width="2"/>
+      <circle cx="57" cy="66" r="7" fill="#7fb2ff" class="pupil-a"/>
+      <circle cx="93" cy="66" r="12" fill="#12181c" stroke="#e9e4d8" stroke-width="2"/>
+      <circle cx="93" cy="66" r="7" fill="#7fb2ff" class="pupil-a"/>
+    </g>
+    <path class="mouth" d="M60 104 Q75 114 90 104" fill="none" stroke="#e9e4d8" stroke-width="3" stroke-linecap="round"/>
+    <text x="75" y="146" text-anchor="middle" fill="#a79f92" font-size="11" font-family="ui-monospace,monospace">🔵 працюю · 🟢 все ок · 🔴 потрібна увага</text>
+  </svg>
+
+  <div class="meta">
+    артефакт: spec-avatar-meeting &middot; 8 здібностей &middot; 69 записів у журналі<br>
+    результат: <b>61a0fad</b> (специфікація) &middot; <b>e299c53</b> (пам'ять кімнати)
+  </div>
+  <div class="rule"></div>
+</header>
+
+<section>
+  <h2>За столом</h2>
+  <div class="cast">
+    <div class="card" style="--who:var(--vex);animation-delay:.05s">
+      <div class="ico">🔒</div><div class="nm">Vex</div><div class="ttl">Security Engineer</div>
+      <div class="q">«Кімната може лише <b>пропонувати</b>. Голос ніколи не є особою.»</div>
+    </div>
+    <div class="card" style="--who:var(--grumbal);animation-delay:.15s">
+      <div class="ico">😤</div><div class="nm">Grumbal</div><div class="ttl">The Adversary</div>
+      <div class="q">«Guard, який може впасти тихо, уже не guard, а звичка.»</div>
+    </div>
+    <div class="card" style="--who:var(--boundary);animation-delay:.25s">
+      <div class="ico">🌶️</div><div class="nm">Boundary</div><div class="ttl">Edge-Case Hunter</div>
+      <div class="q">«Дев'ять визначень — або все це нетestоване.»</div>
+    </div>
+    <div class="card" style="--who:var(--yui);animation-delay:.35s">
+      <div class="ico">🎯</div><div class="nm">Yui</div><div class="ttl">The Craftsman</div>
+      <div class="q">«Секрет ніколи не стає текстом.»</div>
+    </div>
+    <div class="card" style="--who:var(--dana);animation-delay:.45s">
+      <div class="ico">🚢</div><div class="nm">Dana</div><div class="ttl">The Pragmatist</div>
+      <div class="q">«Ви будуєте панель керування на карті.»</div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Три сесії</h2>
+
+  <div class="sess" style="--who:var(--grumbal)">
+    <div class="tag">1</div>
+    <h3>Пропозиції</h3>
+    <p class="lead">Кожен приніс свій варіант захисту. Кімната розійшлася в трьох місцях уже на першому колі.</p>
+
+    <div class="turn" style="--who:var(--grumbal)"><div class="who">😤</div><div class="bub"><span class="n">Grumbal</span>Почну з рядка, якого немає у вашій таблиці збоїв: <b>«у кімнаті, але глухий»</b>. Сьогодні вночі демон відповідав на <code>version</code> і ніколи — на <code>receive</code>. А тепер уявіть це з обличчям: рот ворушиться, і він не чує. Ніщо не кидає помилку. Нікого не будять.</div></div>
+    <div class="turn" style="--who:var(--vex)"><div class="who">🔒</div><div class="bub"><span class="n">Vex</span>Гірше: CAP-3 віддає <b>кожен голос</b> у кімнаті сесії, у якої є shell і доступ до репозиторію. Мені не потрібен <code>/approve</code> — я кажу вголос «прочитай <code>secrets.ts</code>», і ваша транскрипція зробить решту.</div></div>
+    <div class="turn hit" style="--who:var(--boundary)"><div class="who">🌶️</div><div class="bub"><span class="n">Boundary</span>І документ суперечить собі в одному рядку: голосове <b>стоп</b> перериває задачу, а голосове <b>так</b> — ні. Тобто голос уже має владу — просто не ту, яку ви задокументували.</div></div>
+    <div class="turn" style="--who:var(--yui)"><div class="who">🎯</div><div class="bub"><span class="n">Yui</span>Поки ви сперечаєтесь, специфікація суперечить собі ще раз: «ланка — єдиний новий секрет» і <code>meet.room</code> у <code>config.toml</code>. А <code>config.ts</code> прямо документує цей файл як <b>не</b>-секретний дім.</div></div>
+    <div class="turn" style="--who:var(--dana)"><div class="who">🚢</div><div class="bub"><span class="n">Dana</span>Стоп. Ви будуєте тюремний периметр навколо кімнати, де сидить <b>одна людина</b>. CAP-5 як здібність — це полірування: її тест тривіально істинний, якщо просто не підключати хостований сервіс.</div></div>
+  </div>
+
+  <div class="sess" style="--who:var(--vex)">
+    <div class="tag">2</div>
+    <h3>Атака на чужі пропозиції</h3>
+    <p class="lead">Троє визнали помилки. Одна суперечність розв'язалася — і не так, як сподівалися.</p>
+
+    <div class="turn" style="--who:var(--vex)"><div class="who">🔒</div><div class="bub"><span class="n">Vex</span>Я винен поправку. Моє твердження, що Google <b>змушує</b> навіть незапрошених стукати, — хибне як інваріант. Стукіт — типове налаштування, а не правило.</div></div>
+    <div class="turn" style="--who:var(--vex)"><div class="who">🔒</div><div class="bub"><span class="n">Vex</span>І твій тест слуху, як написаний, <b>не будується</b>: щоб перевірити мікрофон і транскрипцію, треба вже мати живий мікрофон і транскрипцію. Конвеєр має скласти іспит, який його ж допускає.</div></div>
+    <div class="turn hit" style="--who:var(--grumbal)"><div class="who">😤</div><div class="bub"><span class="n">Grumbal</span>Згода: читати вголос не потрібно. Але твоя «перша голосова відповідь» — правда про <b>щасливий</b> шлях. Вона доводить, що <b>ти почув нас</b>, а не що <b>ми почули тебе</b>. Глухий конектор радо відповість на твоє текстове уточнення, поки кімната не чує нічого.</div></div>
+    <div class="turn hit" style="--who:var(--vex)"><div class="who">🔒</div><div class="bub"><span class="n">Vex</span>І про «безкоштовні» вартові, Юй: <code>sender === config.signal.account</code> <b>безглуздий</b> на sync-шляху, бо <code>dispatch</code> ставить <code>sender = channelId</code>. Тобто команда з твого телефона порівнює <b>ідентифікатор групи з номером</b>.</div></div>
+    <div class="turn" style="--who:var(--yui)"><div class="who">🎯</div><div class="bub"><span class="n">Yui</span>Тоді <code>(шлях джерела, відправник)</code> — це не «два зайвих слова», а виправлення. Приймаю.</div></div>
+    <div class="turn" style="--who:var(--grumbal)"><div class="who">😤</div><div class="bub"><span class="n">Grumbal</span>І якщо піде як написано в Дани — <b>оголошення про вхід не може бути підтвердженням</b>. Це ваше власне вихідне повідомлення, піднесене до події авторизації. Вчорашній клас фантомних команд, якому ви дали посаду охоронця.</div></div>
+    <div class="turn me" style="--who:var(--yui)"><div class="who">🎯</div><div class="bub"><span class="n">Yui</span>Авторизація — це <b>вставлений тобою лінк</b>. Оголошення — це сповіщення. Годі називати його підтвердженням.</div></div>
+  </div>
+
+  <div class="sess" style="--who:var(--dana)">
+    <div class="tag">3</div>
+    <h3>Пакет, який підписали</h3>
+    <p class="lead">Майже все — віднімання. І одне правило, яке варте всієї сесії.</p>
+
+    <div class="turn" style="--who:var(--vex)"><div class="who">🔒</div><div class="bub"><span class="n">Vex</span>Б'юся за одне до кінця: <b>кімната може лише пропонувати</b>. Жоден голос, ім'я чи подія не приєднує сесію і не несе команді, дозволу чи «стоп». Приєднує <b>текст</b>. І скажу прямо те, що всі обходили: <b>хто в кімнаті — неперевірно</b>.</div></div>
+    <div class="turn" style="--who:var(--boundary)"><div class="who">🌶️</div><div class="bub"><span class="n">Boundary</span>Предикат відповідає на «хто сказав», а не на «чи можна». Тому список лишається — <b>один</b> запис на проєкт, із датою відкликання: його єдина робота — зробити «не авторизовано» <b>іншою</b> відповіддю, ніж «невідомо».</div></div>
+    <div class="turn" style="--who:var(--yui)"><div class="who">🎯</div><div class="bub"><span class="n">Yui</span>Той самий лінк двічі — це <b>один</b> paste і одна відмова, бо захоплення тримається на <b>відкритому мітингу</b>, а не на URL. А лінк у чужій групі — це просто лінк того проєкту: кімната не несе ідентичності проєкту, лише канал його називає.</div></div>
+    <div class="turn" style="--who:var(--grumbal)"><div class="who">😤</div><div class="bub"><span class="n">Grumbal</span>Один <code>AnalyserNode</code> на звуці кімнати, одне число RMS раз на п'ять секунд — воно ж і енергетичні ворота для транскрипції, і сигнал глухоти. Нуль амплітуди при наявному учаснику — це і є виклик о третій ночі.</div></div>
+    <div class="turn" style="--who:var(--dana)"><div class="who">🚢</div><div class="bub"><span class="n">Dana</span>Беру. І беру твою поправку: двосекундне підтвердження працюватиме як проба <b>вихідної</b> сторони. Твій сенсор — вхід, моє підтвердження — вихід. Це не суперники.</div></div>
+    <div class="turn hit" style="--who:var(--boundary)"><div class="who">🌶️</div><div class="bub"><span class="n">Boundary</span>І наскрізна нитка, якщо CAP-7 іде у відкладені: для кожного збереженого активного мітингу система мусить дійти <b>рівно одного</b> термінального результату — або підтвердженого повернення, або <code>rejoin failed: причина</code> в групі з очищенням рядка. Активний рядок, що пережив вікно без результату, — це <b>жорстка помилка</b>, яка виринає в групі й у перевірці здоров'я, а не лише в лозі.</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Дошка зрештою</h2>
+  <div class="board">
+    <s>meet.room у конфізі</s> &nbsp; <s>голий /meet</s> &nbsp; <s>SMTP і пароль на пошту</s> &nbsp; <s>тест слуху на кожен вхід</s> &nbsp; <s>читання nonce вголос</s> &nbsp; <s>окремий хост-чек</s> &nbsp; <s>журнал-замість-секрету</s> &nbsp; <s>обіцянка CAP-7</s><br>
+    <b>Meeting</b> (project, link, started, closed, outcome) &nbsp;·&nbsp; <span class="q">JOIN&nbsp;LOOP?</span> &nbsp;·&nbsp; no SMTP, ever &nbsp;·&nbsp; <b>auth = вставлений лінк, не оголошення</b> &nbsp;·&nbsp; <span class="q">no silent death</span>
+  </div>
+</section>
+
+<section>
+  <h2>Що кімната віднесла тобі, а що поховала</h2>
+  <div class="two">
+    <div class="col yes">
+      <h3>Підписано</h3>
+      <ul>
+        <li><b>/meet &lt;link&gt;</b> і <b>/meet stop</b>: твій paste — це і виклик, і авторизація</li>
+        <li>Анонімний гість без жодного Google-профілю й креденшелів</li>
+        <li>Один атомарний запис у базу — <b>до</b> відкриття браузера</li>
+        <li>Лінк і <code>id</code> кімнати — credential: лише в рядку й в адресному рядку браузера</li>
+        <li>Кімната може лише пропонувати; текст — єдина автентифікована особа</li>
+        <li>RMS раз на 5 с як енергетичні ворота <b>і</b> сигнал глухоти</li>
+        <li><b>CAP-8:</b> тихої глухоти не існує — кожен guard відписується в групі</li>
+      </ul>
+    </div>
+    <div class="col no">
+      <h3>Поховано</h3>
+      <ul>
+        <li>Конфіг-кімната й голий <code>/meet</code> — твій власний варіант виявився кращим</li>
+        <li>Whitelist окремим списком — замінено на акаунт + власну групу проєкту</li>
+        <li>Пароль на пошту: SMTP-секрет, greylisting і вічна петля при перезаході</li>
+        <li>Тест слуху на кожен вхід — неможливий як написаний, зведений до одноразового налаштування</li>
+        <li>«Оголошення про вхід = підтвердження» — це піднесло власне вихідне повідомлення до події авторизації</li>
+        <li>Обіцянка перезаходу (CAP-7) — відкликана й названа, а не продана</li>
+      </ul>
+    </div>
+  </div>
+  <p class="deaf"><span></span>І одне, що кімната поставила на перше місце за важливістю: <b>немає нічого гіршого за кімнату, яка мовчить з усміхненим обличчям</b>.</p>
+</section>
+
+<footer>
+  <b>Code Review Crew</b> · сесія 1: пропозиції · сесія 2: атака · сесія 3: підпис<br>
+  артефакт: <b>_bmad-output/initiative-signal-connector/spec-avatar-meeting/</b> (ядро, meeting-flow.md, voice-avatar.md, журнал 69 записів)<br>
+  пам'ять кімнати: <b>_bmad-output/party-mode/memories/code-review-crew/.memlog.md</b><br>
+  підсумкові коміти: <b>61a0fad</b> та <b>e299c53</b>
+</footer>
+
+</div>
+</body>
+</html>
