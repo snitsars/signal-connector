@@ -37,6 +37,9 @@ A drawn face needs about fifteen frames a second.
 - When the operator starts speaking, the avatar stops talking. Full duplex with overlap
   resolution is out of scope for the first slice.
 - Both a spoken stop and the Signal stop command abort the running task.
+- A permission is announced aloud and then waits: the decision is typed in Signal,
+  because anybody in the room can speak and only the text channel is an authenticated
+  identity.
 
 ## Tools to fetch
 
