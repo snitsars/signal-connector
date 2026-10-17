@@ -108,6 +108,34 @@ session = 'ses_ec42cabb8ffe8UkLJmCcd8w06c'   # the id shown in OPENCODE_SESSION_
 
 Restart the service after editing, and `/new` moves the project off the pin.
 
+### Summoning a meeting
+
+`/meet <link>` in a project's group joins that room as the project's avatar. Who may
+summon one is configured per project: `meet.allow` lists the accepted identities (a
+Signal uuid/ACI, or the number), and an absent or empty list refuses every paste —
+it never accepts by default.
+
+```toml
+[[projects]]
+name = "SignalConnector"
+path = 'C:\Sources\SignalConnector'
+meet = { allow = [{ id = "+1000", label = "+1000" }], providers = ["meet.jit.si"] }
+# retire an entry without deleting it:
+# meet = { allow = [{ id = "+1000", label = "+1000", revokedAt = "2026-01-01T00:00:00Z" }] }
+```
+
+The number works today, and a uuid entry is honoured when you know it; when both a uuid
+and a number entry could match, the uuid is the identity. A message from the linked phone
+is the operator's own device by construction, so it passes regardless of the entry.
+
+A paste is honoured only from a configured identity, and only for a well-formed `https`
+room link on an accepted provider host that answers a short reachability probe. No
+provider host is assumed: name the hosts your rooms live on with
+`meet.providers = ["your.host"]`, or every paste is refused as a foreign provider. Each
+refusal names its own category — “not authorised”, “malformed link”, “not the configured
+meeting provider”, “could not reach the room”, “already running” — and never echoes the
+link.
+
 ### Message colours
 
 Signal has no coloured text, so state is carried by circles. The language:

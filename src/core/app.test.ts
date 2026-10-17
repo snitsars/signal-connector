@@ -4,7 +4,7 @@ import { FakeMeeting } from "../adapters/fakes/fakeMeeting.js";
 import { FakeSignal } from "../adapters/fakes/fakeSignal.js";
 import { ConfigSchema } from "../config/config.js";
 import type { LauncherPort, MeetingPort } from "./ports.js";
-import { nullLogger } from "../logging/logger.js";
+import { nullLogger, type Logger } from "../logging/logger.js";
 import { openStore, type Store } from "../store/store.js";
 import { CoreApp } from "./app.js";
 
@@ -19,6 +19,8 @@ function makeApp(
   outbound: Record<string, unknown> = {},
   launcher?: LauncherPort,
   meeting?: MeetingPort,
+  probeRoom?: (link: URL) => Promise<boolean>,
+  logger?: Logger,
 ) {
   const store: Store = openStore(":memory:");
   storeRef = store;
@@ -35,9 +37,10 @@ function makeApp(
     signal,
     agent,
     config,
-    logger: nullLogger(),
+    logger: logger ?? nullLogger(),
     ...(launcher ? { launcher } : {}),
     ...(meeting ? { meeting } : {}),
+    ...(probeRoom ? { probeRoom } : {}),
   });
   return { store, signal, agent, app };
 }
@@ -59,11 +62,36 @@ class FakeLauncher implements LauncherPort {
   }
 }
 
+/** A logger that keeps every line, so a test can inspect what was written. */
+class CapturingLogger implements Logger {
+  readonly lines: string[] = [];
+  private record(level: string, msg: string, fields?: Record<string, unknown>): void {
+    this.lines.push(JSON.stringify({ level, msg, ...fields }));
+  }
+  debug(msg: string, fields?: Record<string, unknown>): void {
+    this.record("debug", msg, fields);
+  }
+  info(msg: string, fields?: Record<string, unknown>): void {
+    this.record("info", msg, fields);
+  }
+  warn(msg: string, fields?: Record<string, unknown>): void {
+    this.record("warn", msg, fields);
+  }
+  error(msg: string, fields?: Record<string, unknown>): void {
+    this.record("error", msg, fields);
+  }
+}
+
 /**
  * A message arriving in a specific channel — used for answers that belong to a
  * project's own group (menus, approvals) rather than the control channel.
  */
-function incomingIn(channelId: string, text: string, inControlChannel = false) {
+function incomingIn(
+  channelId: string,
+  text: string,
+  inControlChannel = false,
+  delivery: "data" | "sync" = "data",
+) {
   return {
     id: String(Math.random()),
     channelId,
@@ -71,6 +99,7 @@ function incomingIn(channelId: string, text: string, inControlChannel = false) {
     text,
     at: Date.now(),
     inControlChannel,
+    delivery,
   };
 }
 
@@ -78,8 +107,9 @@ function incomingIn(channelId: string, text: string, inControlChannel = false) {
  * A message from the operator. Control commands arrive in the control channel;
  * everything else arrives where the project's conversation lives — its own group
  * once `/open` has created one, which is how the operator actually works now.
+ * `delivery` defaults to the network path; a phone paste is "sync".
  */
-function incoming(text: string) {
+function incoming(text: string, delivery: "data" | "sync" = "data") {
   const general = /^\/(open|projects|help)\b/.test(text.trim());
   const channelId = general ? "self" : storeRef?.getChannel("demo")?.channelId ?? "self";
   return {
@@ -89,6 +119,7 @@ function incoming(text: string) {
     text,
     at: Date.now(),
     inControlChannel: channelId === "self",
+    delivery,
   };
 }
 
@@ -825,14 +856,20 @@ describe("CoreApp", () => {
 });
 
 describe("meetings", () => {
-  const LINK = "https://meet.example/room-abc";
+  const LINK = "https://meet.jit.si/room-abc";
+  /** The demo project, with the operator listed so a paste may be honoured. */
+  const PROJECTS = [
+    { name: "demo", path: "/tmp/demo", meet: { allow: [{ id: "+1000", label: "+1000" }], providers: ["meet.jit.si"] } },
+  ];
+  /** The reachability probe is faked: the gate's tests never touch the network. */
+  const reachable = async (): Promise<boolean> => true;
   let meeting: FakeMeeting;
   let ctx: ReturnType<typeof makeApp>;
 
   /** A started app whose demo project already owns its own group. */
   async function openProject(): Promise<void> {
     meeting = new FakeMeeting();
-    ctx = makeApp(undefined, {}, undefined, meeting);
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable);
     await ctx.app.start();
     ctx.signal.emitMessage(incoming("/open demo"));
     await tick();
@@ -860,7 +897,7 @@ describe("meetings", () => {
     expect(message.channelId).toBe("group-1-demo");
     expect(message.text).toContain("joining as demo");
     expect(ctx.signal.sent.filter((m) => m.text.includes("Meeting ·"))).toHaveLength(1);
-    expect(ctx.signal.sent.every((m) => !m.text.includes("meet.example"))).toBe(true);
+    expect(ctx.signal.sent.every((m) => !m.text.includes("meet.jit.si"))).toBe(true);
 
     meeting.admit();
     await tick();
@@ -899,15 +936,52 @@ describe("meetings", () => {
     await tick();
     const joins = meeting.joins.length;
 
-    ctx.signal.emitMessage(incoming("/meet https://meet.example/second"));
+    ctx.signal.emitMessage(incoming("/meet https://meet.jit.si/second"));
     await tick();
 
     expect(meeting.joins).toHaveLength(joins);
     const refusal = ctx.signal.sent.at(-1)!;
     expect(refusal.text).toContain("already open in demo");
     expect(refusal.text).toMatch(/started \d{2}:\d{2}:\d{2}/);
-    expect(refusal.text).not.toContain("meet.example");
+    expect(refusal.text).not.toContain("meet.jit.si");
     expect(ctx.store.getOpenMeeting()?.link).toBe(LINK);
+    await ctx.app.stop();
+  });
+
+  it("refuses the same link twice as one paste, without a second join", async () => {
+    await openProject();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+
+    expect(meeting.joins).toHaveLength(1);
+    const refusal = ctx.signal.sent.at(-1)!;
+    expect(refusal.text).toContain("already open in demo");
+    expect(refusal.text).not.toContain("meet.jit.si");
+    expect(ctx.store.getOpenMeeting()?.link).toBe(LINK);
+    await ctx.app.stop();
+  });
+
+  it("names the open meeting before probing an unreachable link", async () => {
+    meeting = new FakeMeeting();
+    // The probe would refuse this link as unreachable; the open meeting must win.
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, async () => false);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.store.claimMeeting({ projectId: "demo", link: LINK, startedAt: Date.now() });
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+
+    const refusal = ctx.signal.sent.at(-1)!;
+    expect(refusal.text).toContain("already open in demo");
+    expect(refusal.text).not.toContain("Could not reach the room");
+    expect(meeting.joins).toHaveLength(0);
+    expect(meeting.availableCalls).toBe(0);
     await ctx.app.stop();
   });
 
@@ -915,12 +989,13 @@ describe("meetings", () => {
     meeting = new FakeMeeting();
     ctx = makeApp(
       [
-        { name: "demo", path: "/tmp/demo" },
-        { name: "other", path: "/tmp/other" },
+        { name: "demo", path: "/tmp/demo", meet: { allow: [{ id: "+1000" }], providers: ["meet.jit.si"] } },
+        { name: "other", path: "/tmp/other", meet: { allow: [{ id: "+1000" }], providers: ["meet.jit.si"] } },
       ],
       {},
       undefined,
       meeting,
+      reachable,
     );
     await ctx.app.start();
     ctx.signal.emitMessage(incoming("/open demo"));
@@ -932,7 +1007,7 @@ describe("meetings", () => {
     await tick();
 
     ctx.signal.emitMessage(
-      incomingIn("group-2-other", "/meet https://meet.example/third"),
+      incomingIn("group-2-other", "/meet https://meet.jit.si/third"),
     );
     await tick();
 
@@ -968,7 +1043,7 @@ describe("meetings", () => {
   it("refuses before claiming a row when no browser is installed", async () => {
     meeting = new FakeMeeting();
     meeting.unavailableReason = "neither Chrome nor Edge was found on this machine";
-    ctx = makeApp(undefined, {}, undefined, meeting);
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable);
     await ctx.app.start();
     ctx.signal.emitMessage(incoming("/open demo"));
     await tick();
@@ -979,6 +1054,212 @@ describe("meetings", () => {
     expect(ctx.signal.sent.at(-1)?.text).toContain("neither Chrome nor Edge was found");
     expect(meeting.joins).toHaveLength(0);
     expect(ctx.store.getOpenMeeting()).toBeUndefined();
+  });
+
+  it("refuses a paste from a sender who is not configured, naming them", async () => {
+    await openProject();
+
+    ctx.signal.emitMessage({
+      id: "stranger-1",
+      channelId: projectChannel(ctx),
+      sender: "+2000",
+      text: `/meet ${LINK}`,
+      at: Date.now(),
+      inControlChannel: false,
+      delivery: "data",
+    });
+    await tick();
+
+    const refusal = ctx.signal.sent.at(-1)!;
+    expect(refusal.text).toContain("Not authorised");
+    expect(refusal.text).toContain("+2000");
+    expect(refusal.text).not.toContain("meet.jit.si");
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(meeting.joins).toHaveLength(0);
+    // A refused paste must not even ask whether a browser is available.
+    expect(meeting.availableCalls).toBe(0);
+  });
+
+  it("refuses every paste when no identities are configured, never accepting by default", async () => {
+    meeting = new FakeMeeting();
+    // The default project carries no `meet.allow`, so the gate must fail closed.
+    ctx = makeApp(undefined, {}, undefined, meeting, reachable);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`, "sync"));
+    await tick();
+
+    expect(ctx.signal.sent.at(-1)?.text).toContain(
+      "No accepted identities are configured for demo",
+    );
+    expect(ctx.signal.sent.at(-1)?.text).not.toContain("meet.jit.si");
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(meeting.joins).toHaveLength(0);
+  });
+
+  it("refuses a revoked identity as not authorised", async () => {
+    meeting = new FakeMeeting();
+    ctx = makeApp(
+      [
+        {
+          name: "demo",
+          path: "/tmp/demo",
+          meet: { allow: [{ id: "+1000", label: "+1000", revokedAt: "2000-01-01T00:00:00Z" }], providers: ["meet.jit.si"] },
+        },
+      ],
+      {},
+      undefined,
+      meeting,
+      reachable,
+    );
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+
+    expect(ctx.signal.sent.at(-1)?.text).toContain("Not authorised");
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(meeting.joins).toHaveLength(0);
+  });
+
+  it("refuses a malformed link and a foreign provider with their own categories", async () => {
+    await openProject();
+
+    ctx.signal.emitMessage(incoming("/meet not-a-link"));
+    await tick();
+    expect(ctx.signal.sent.at(-1)?.text).toContain("Malformed link");
+
+    ctx.signal.emitMessage(incoming("/meet http://meet.jit.si/room"));
+    await tick();
+    expect(ctx.signal.sent.at(-1)?.text).toContain("Malformed link");
+
+    ctx.signal.emitMessage(incoming("/meet https://zoom.us/j/secret"));
+    await tick();
+    const foreign = ctx.signal.sent.at(-1)!;
+    expect(foreign.text).toContain("Not the configured meeting provider");
+    expect(foreign.text).not.toContain("zoom.us");
+
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(meeting.joins).toHaveLength(0);
+    expect(ctx.signal.sent.every((m) => !m.text.includes("zoom.us"))).toBe(true);
+  });
+
+  it("refuses an unreachable room without claiming the slot", async () => {
+    meeting = new FakeMeeting();
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, async () => false);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+
+    const refusal = ctx.signal.sent.at(-1)!;
+    expect(refusal.text).toContain("Could not reach the room");
+    expect(refusal.text).not.toContain("meet.jit.si");
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(meeting.joins).toHaveLength(0);
+  });
+
+  it("checks the gate before the browser, so a stranger is named first", async () => {
+    meeting = new FakeMeeting();
+    meeting.unavailableReason = "neither Chrome nor Edge was found on this machine";
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+
+    ctx.signal.emitMessage({
+      id: "stranger-2",
+      channelId: projectChannel(ctx),
+      sender: "+2000",
+      text: `/meet ${LINK}`,
+      at: Date.now(),
+      inControlChannel: false,
+      delivery: "data",
+    });
+    await tick();
+
+    const refusal = ctx.signal.sent.at(-1)!;
+    expect(refusal.text).toContain("Not authorised");
+    expect(refusal.text).not.toContain("neither Chrome nor Edge");
+    expect(meeting.joins).toHaveLength(0);
+  });
+
+  it("accepts a sync paste as the operator's own device", async () => {
+    meeting = new FakeMeeting();
+    // The configured entry is a different number: the sync path is trusted by
+    // construction, so it must still pass.
+    ctx = makeApp(
+      [{ name: "demo", path: "/tmp/demo", meet: { allow: [{ id: "+9999" }], providers: ["meet.jit.si"] } }],
+      {},
+      undefined,
+      meeting,
+      reachable,
+    );
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`, "sync"));
+    await tick();
+    await tick();
+
+    expect(meeting.joins.at(-1)?.link).toBe(LINK);
+    await ctx.app.stop();
+  });
+
+  it("honours a project's configured provider hosts", async () => {
+    meeting = new FakeMeeting();
+    ctx = makeApp(
+      [
+        {
+          name: "demo",
+          path: "/tmp/demo",
+          meet: { allow: [{ id: "+1000" }], providers: ["meet.example"] },
+        },
+      ],
+      {},
+      undefined,
+      meeting,
+      reachable,
+    );
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+
+    ctx.signal.emitMessage(incoming("/meet https://meet.example/room"));
+    await tick();
+    await tick();
+
+    expect(meeting.joins.at(-1)?.link).toBe("https://meet.example/room");
+    await ctx.app.stop();
+  });
+
+  it("keeps the link out of the log as well as out of the group", async () => {
+    const logger = new CapturingLogger();
+    meeting = new FakeMeeting();
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable, logger);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`, "sync"));
+    await tick();
+    await tick();
+    ctx.signal.emitMessage(incoming("/meet https://zoom.us/j/secret"));
+    await tick();
+
+    const log = logger.lines.join("\n");
+    expect(log).not.toContain("meet.jit.si");
+    expect(log).not.toContain("zoom.us");
+    expect(ctx.signal.sent.every((m) => !m.text.includes("meet.jit.si"))).toBe(true);
+    expect(ctx.signal.sent.every((m) => !m.text.includes("zoom.us"))).toBe(true);
+    await ctx.app.stop();
   });
 
   it("leaves on /meet stop, wipes the link and posts exactly one summary", async () => {
@@ -1043,7 +1324,7 @@ describe("meetings", () => {
     expect(ctx.store.getOpenMeeting()).toBeUndefined();
     const summary = ctx.signal.sent.at(-1)!;
     expect(summary.text).toContain("ended without a live browser");
-    expect(summary.text).not.toContain("meet.example");
+    expect(summary.text).not.toContain("meet.jit.si");
     expect(meeting.leaves).toHaveLength(0);
   });
 
@@ -1172,7 +1453,7 @@ describe("meetings", () => {
 
   it("closes a row a previous run left open and says so in the project's group", async () => {
     meeting = new FakeMeeting();
-    ctx = makeApp(undefined, {}, undefined, meeting);
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable);
     ctx.store.upsertProject({ id: "demo", name: "demo", path: "/tmp/demo" });
     ctx.store.setChannel("demo", "group-stale", "demo");
     ctx.store.claimMeeting({
@@ -1188,7 +1469,7 @@ describe("meetings", () => {
       m.text.includes("previous run left this meeting open"),
     );
     expect(notice?.channelId).toBe("group-stale");
-    expect(notice?.text).not.toContain("meet.example");
+    expect(notice?.text).not.toContain("meet.jit.si");
 
     // The slot is free again in the same run.
     ctx.signal.emitMessage({
@@ -1198,6 +1479,7 @@ describe("meetings", () => {
       text: `/meet ${LINK}`,
       at: Date.now(),
       inControlChannel: false,
+      delivery: "sync",
     });
     await tick();
     await tick();

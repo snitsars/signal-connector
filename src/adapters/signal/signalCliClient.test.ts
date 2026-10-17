@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { IncomingMessage } from "../../domain/types.js";
 import { createLogger } from "../../logging/logger.js";
 import {
   attachmentData,
@@ -184,7 +185,12 @@ describe("redactEnvelope", () => {
 describe("echo guard", () => {
   /** A client wired to a server that hands out prepared envelopes. */
   async function withEnvelopes(
-    run: (client: SignalCliClient, envelopes: unknown[], received: string[]) => Promise<void>,
+    run: (
+      client: SignalCliClient,
+      envelopes: unknown[],
+      received: string[],
+      messages: IncomingMessage[],
+    ) => Promise<void>,
     sentLogFile = tempSentLog(),
   ): Promise<void> {
     const envelopes: unknown[] = [];
@@ -202,6 +208,7 @@ describe("echo guard", () => {
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = (server.address() as AddressInfo).port;
     const received: string[] = [];
+    const messages: IncomingMessage[] = [];
     const client = new SignalCliClient({
       endpoint: `http://127.0.0.1:${port}/api/v1/rpc`,
       account: "+1000",
@@ -210,10 +217,13 @@ describe("echo guard", () => {
       sentLogFile: sentLogFile,
       logger: createLogger({ level: "error", console: false }),
     });
-    client.onMessage((m) => received.push(m.text));
+    client.onMessage((m) => {
+      received.push(m.text);
+      messages.push(m);
+    });
 
     try {
-      await run(client, envelopes, received);
+      await run(client, envelopes, received, messages);
     } finally {
       await client.stop();
       server.closeAllConnections();
@@ -239,6 +249,37 @@ describe("echo guard", () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
 
       expect(received).toEqual(["Продовжуй", "run the tests"]);
+    });
+  });
+
+  it("marks each message with its delivery path and the sender's uuid", async () => {
+    await withEnvelopes(async (client, envelopes, _received, messages) => {
+      envelopes.push(
+        {
+          envelope: {
+            sourceNumber: "+2000",
+            sourceUuid: "uuid-2",
+            timestamp: 100,
+            dataMessage: { message: "run the tests" },
+          },
+        },
+        { envelope: { sourceNumber: "+3000", timestamp: 200, dataMessage: { message: "no uuid" } } },
+        {
+          envelope: {
+            syncMessage: {
+              sentMessage: { destinationNumber: "+1000", message: "Продовжуй", timestamp: 300 },
+            },
+          },
+        },
+      );
+      await client.start();
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
+      expect(messages.map((m) => [m.delivery, m.senderUuid])).toEqual([
+        ["data", "uuid-2"],
+        ["data", undefined],
+        ["sync", undefined],
+      ]);
     });
   });
 

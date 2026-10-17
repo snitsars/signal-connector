@@ -28,6 +28,7 @@ function msg(text: string, channelId = "self") {
     text,
     at: Date.now(),
     inControlChannel: channelId === "self",
+    delivery: "data" as const,
   };
 }
 

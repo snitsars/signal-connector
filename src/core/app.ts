@@ -29,6 +29,7 @@ import type {
   SignalPort,
 } from "./ports.js";
 import { renderStyled } from "./format.js";
+import { decidePaste, PROVIDER_HOSTS, type PasteRefusal } from "./gate.js";
 import { MARK } from "./progress.js";
 import { HELP_TEXT, KNOWN_COMMANDS, parseInput } from "./router.js";
 import {
@@ -50,6 +51,11 @@ export interface CoreDeps {
   launcher?: LauncherPort;
   /** Optional: joins a meeting room as the project's avatar. */
   meeting?: MeetingPort;
+  /**
+   * Optional: the one bounded reachability probe before a meeting is claimed.
+   * Injectable so tests prove the gate without a network.
+   */
+  probeRoom?: (link: URL) => Promise<boolean>;
   now?: () => number;
 }
 
@@ -104,6 +110,8 @@ export class CoreApp {
   private readonly launcher: LauncherPort | undefined;
   private readonly meetingPort: MeetingPort | undefined;
   private readonly now: () => number;
+  /** One bounded reachability probe; the only I/O between gate and claim. */
+  private readonly probeRoom: (link: URL) => Promise<boolean>;
   private controlChannel = "self";
   /** The live meeting, if this process owns one. */
   private activeMeeting: ActiveMeeting | undefined;
@@ -123,6 +131,35 @@ export class CoreApp {
     this.launcher = deps.launcher;
     this.meetingPort = deps.meeting;
     this.now = deps.now ?? (() => Date.now());
+    this.probeRoom = deps.probeRoom ?? ((link) => this.fetchRoom(link));
+  }
+
+  /**
+   * The one bounded reachability probe: a single fetch with a three-second
+   * timeout and no retries. Redirects are not followed — the gate cleared the
+   * host that was pasted, not wherever it points next — and any 3xx counts as
+   * reachable. The body is cancelled so the request does not hold a socket.
+   */
+  private async fetchRoom(link: URL): Promise<boolean> {
+    try {
+      const response = await fetch(link, {
+        method: "GET",
+        redirect: "manual",
+        signal: AbortSignal.timeout(3000),
+      });
+      try {
+        if (response.status >= 300 && response.status < 400) return true;
+        return response.ok;
+      } finally {
+        try {
+          await response.body?.cancel();
+        } catch {
+          // The decision is already made; a body that will not cancel is noise.
+        }
+      }
+    } catch {
+      return false;
+    }
   }
 
   async start(): Promise<void> {
@@ -199,7 +236,7 @@ export class CoreApp {
       return;
     }
     if (parsed.kind === "command") {
-      await this.dispatchCommand(parsed.name, parsed.args);
+      await this.dispatchCommand(parsed.name, parsed.args, msg);
       return;
     }
     // A number answers the newest open menu; any other text means the operator
@@ -229,7 +266,11 @@ export class CoreApp {
     return text ? `${text}\n\n${lines}` : lines;
   }
 
-  private async dispatchCommand(name: string, args: string): Promise<void> {
+  private async dispatchCommand(
+    name: string,
+    args: string,
+    msg?: IncomingMessage,
+  ): Promise<void> {
     if (!KNOWN_COMMANDS.includes(name as (typeof KNOWN_COMMANDS)[number])) {
       await this.reply(`Unknown command /${name}.\n\n${HELP_TEXT}`);
       return;
@@ -274,7 +315,7 @@ export class CoreApp {
         await this.stopTask();
         return;
       case "meet":
-        await this.meetCommand(args);
+        await this.meetCommand(args, msg);
         return;
       default:
         await this.reply(HELP_TEXT);
@@ -563,7 +604,7 @@ export class CoreApp {
   // --- meetings ------------------------------------------------------------
 
   /** `/meet <link>` claims the one meeting slot and joins; `/meet stop` leaves. */
-  private async meetCommand(args: string): Promise<void> {
+  private async meetCommand(args: string, msg?: IncomingMessage): Promise<void> {
     const trimmed = args.trim();
     if (!trimmed) {
       await this.reply("Usage: /meet <link>, or /meet stop");
@@ -580,15 +621,51 @@ export class CoreApp {
       return;
     }
 
+    // The gate runs before availability, before the claim and before any
+    // browser: identity, link shape and provider are decided here first.
+    const configured = this.config.projects.find((p) => PROJECT_ID(p.name) === project.id);
+    const decision = decidePaste({
+      delivery: msg?.delivery ?? "data",
+      sender: msg?.sender ?? "",
+      ...(msg?.senderUuid ? { senderUuid: msg.senderUuid } : {}),
+      allow: configured?.meet?.allow ?? [],
+      text: trimmed,
+      providerHosts: configured?.meet?.providers ?? PROVIDER_HOSTS,
+    });
+    if (!decision.ok) {
+      // Only the category is logged: the text is the credential and never
+      // reaches a log line, a refusal or a group message.
+      this.logger.info("meeting: paste refused", {
+        project: project.name,
+        category: decision.category,
+      });
+      await this.refusePaste(project.name, decision);
+      return;
+    }
+
+    if (!this.meetingPort) {
+      await this.reply("Meetings are not available in this build.");
+      return;
+    }
+
+    // A meeting already open is refused here, before the probe spends a request
+    // on it. This is not the slot decision — that is still the claim write below,
+    // which is what settles a race between two pastes.
     const open = this.store.getOpenMeeting();
     if (open) {
       await this.refuseMeeting(open);
       return;
     }
-    if (!this.meetingPort) {
-      await this.reply("Meetings are not available in this build.");
+
+    // One bounded probe, no retries: a room that cannot be fetched is refused
+    // before the slot is claimed.
+    const reachable = await this.probeRoom(decision.link);
+    if (!reachable) {
+      this.logger.info("meeting: room unreachable", { project: project.name });
+      await this.refusePaste(project.name, { ok: false, category: "unreachable-room" });
       return;
     }
+
     const availability = await this.meetingPort.available();
     if (!availability.available) {
       // The refusal comes before any row is claimed, and never echoes the link.
@@ -654,6 +731,29 @@ export class CoreApp {
       },
     );
     this.logger.info("meeting: claimed the slot", { project: project.name });
+  }
+
+  /**
+   * The operator-facing refusal for a gate decision. Every message names its
+   * category and never the link; "not authorised" also names the sender so the
+   * operator can tell a stranger from a misconfigured entry.
+   */
+  private async refusePaste(projectName: string, refusal: PasteRefusal): Promise<void> {
+    const text = ((): string => {
+      switch (refusal.category) {
+        case "no-identities":
+          return `No accepted identities are configured for **${projectName}**. Add one under \`meet.allow\` in config.toml.`;
+        case "not-authorised":
+          return `Not authorised${refusal.detail ? `: ${refusal.detail}` : ""}. Only a configured identity may summon a meeting.`;
+        case "malformed-link":
+          return "Malformed link. Send one https room link for the configured provider.";
+        case "foreign-provider":
+          return "Not the configured meeting provider.";
+        case "unreachable-room":
+          return "Could not reach the room.";
+      }
+    })();
+    await this.reply(`Refused — ${text}`, MARK.attention);
   }
 
   /** Refusal naming who holds the slot and since when — never the link. */

@@ -20,6 +20,8 @@ export interface FakeJoin {
 export class FakeMeeting implements MeetingPort {
   readonly joins: FakeJoin[] = [];
   readonly leaves: string[] = [];
+  /** How many times the core asked whether a browser is available. */
+  availableCalls = 0;
   /** Set to refuse availability, as a machine without Chrome or Edge would. */
   unavailableReason?: string;
   /** Set to make join throw, as a browser that cannot be started would. */
@@ -34,6 +36,7 @@ export class FakeMeeting implements MeetingPort {
   private open = false;
 
   async available(): Promise<MeetingAvailability> {
+    this.availableCalls += 1;
     return this.unavailableReason
       ? { available: false, reason: this.unavailableReason }
       : { available: true };

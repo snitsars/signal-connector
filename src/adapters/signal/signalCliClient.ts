@@ -51,6 +51,8 @@ interface Envelope {
   envelope?: Envelope;
   sourceNumber?: string;
   source?: string;
+  /** The sender's uuid/ACI, when signal-cli reports one. */
+  sourceUuid?: string;
   timestamp?: number;
   dataMessage?: {
     message?: string;
@@ -413,7 +415,10 @@ export class SignalCliClient implements SignalPort {
         text: data.message ?? "",
         at,
         inControlChannel: this.isControlChannel(channelId),
+        // A data message came over the network: the gate must match its sender.
+        delivery: "data",
       };
+      if (env.sourceUuid) message.senderUuid = env.sourceUuid;
       if (data.quote?.id != null) message.quoteId = String(data.quote.id);
       if (mediaPaths.length > 0) message.mediaPaths = mediaPaths;
       if (!message.text && mediaPaths.length === 0) return;
@@ -459,6 +464,8 @@ export class SignalCliClient implements SignalPort {
         text: sent.message ?? "",
         at,
         inControlChannel: this.isControlChannel(channelId),
+        // A sync message is the operator's own linked device by construction.
+        delivery: "sync",
       };
       if (mediaPaths.length > 0) message.mediaPaths = mediaPaths;
       if (!message.text && mediaPaths.length === 0) return;

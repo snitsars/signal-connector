@@ -73,6 +73,29 @@ export const ConfigSchema = z.object({
             argv: z.array(z.string()).optional(),
           })
           .optional(),
+        /**
+         * Who may summon a meeting for this project. `allow` is the accepted
+         * identities (a Signal uuid/ACI, with the number as a label); an absent
+         * or empty list refuses everyone, so a paste is never accepted by
+         * default. `revokedAt` (ISO-8601) retires an entry without deleting it.
+         * `providers` overrides the accepted provider hosts; absent uses the
+         * build's default list.
+         */
+        meet: z
+          .object({
+            allow: z
+              .array(
+                z.object({
+                  id: z.string(),
+                  label: z.string().optional(),
+                  revokedAt: z.string().optional(),
+                }),
+              )
+              .optional()
+              .default([]),
+            providers: z.array(z.string()).optional(),
+          })
+          .optional(),
       }),
     )
     .default([]),

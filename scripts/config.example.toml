@@ -31,3 +31,10 @@ path = 'C:\Sources\myproject'
 # session = 'ses_...'          # optional: pin tasks to an existing opencode session
 # launch = { kind = "herdr" }  # optional: /use opens a visible Herdr workspace
 # launch = { kind = "command", argv = ['opencode', '{path}'] }  # or any command
+# meet.allow: who may summon a meeting in this project's group. Each entry is a
+# Signal uuid/ACI (or the number); label is a readable name for refusals, and
+# revokedAt (ISO-8601) retires an entry. An absent or empty list refuses every
+# paste — it never accepts by default. The number works today; a uuid entry is
+# honoured when known. providers names the room hosts to accept — there is no
+# default, so set it or every paste is refused as a foreign provider.
+# meet = { allow = [{ id = "+1000", label = "+1000" }], providers = ["meet.jit.si"] }

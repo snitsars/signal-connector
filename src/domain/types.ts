@@ -84,6 +84,15 @@ export interface IncomingMessage {
   at: number;
   /** True when this message belongs to the configured control channel. */
   inControlChannel: boolean;
+  /**
+   * How the message arrived. "sync" is the operator's own linked device (the
+   * phone's Note-to-Self echo); "data" is a message that came over the network.
+   * The gate treats them differently because only the sync path is the operator
+   * by construction.
+   */
+  delivery: "data" | "sync";
+  /** The sender's Signal uuid/ACI, when the envelope carries one. */
+  senderUuid?: string;
   quoteId?: string;
   /** Local paths of inbound attachments, saved so the agent can open them. */
   mediaPaths?: string[];

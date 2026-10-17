@@ -193,6 +193,7 @@ async function main(): Promise<void> {
       text,
       at: Date.now(),
       inControlChannel,
+      delivery: "data",
     });
 
   if (process.argv.includes("--demo")) {
