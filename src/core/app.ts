@@ -6,7 +6,7 @@
 import crypto from "node:crypto";
 import type { Config } from "../config/config.js";
 import type { Logger } from "../logging/logger.js";
-import type { Store } from "../store/store.js";
+import type { Store, Meeting } from "../store/store.js";
 import type {
   AgentEvent,
   IncomingMessage,
@@ -18,13 +18,23 @@ import type {
   Reaction,
   Task,
 } from "../domain/types.js";
-import type { AgentPort, LauncherPort, QuoteRef, SignalPort } from "./ports.js";
+import type {
+  AgentPort,
+  LauncherPort,
+  MeetingHandle,
+  MeetingLeaveResult,
+  MeetingPort,
+  MeetingStateEvent,
+  QuoteRef,
+  SignalPort,
+} from "./ports.js";
 import { renderStyled } from "./format.js";
 import { MARK } from "./progress.js";
 import { HELP_TEXT, KNOWN_COMMANDS, parseInput } from "./router.js";
 import {
   choicesText,
   emojiChoice,
+  formatDuration,
   milestoneText,
   statusLine,
   summaryText,
@@ -38,6 +48,8 @@ export interface CoreDeps {
   logger: Logger;
   /** Optional: opens a project's window when nothing is connected for it. */
   launcher?: LauncherPort;
+  /** Optional: joins a meeting room as the project's avatar. */
+  meeting?: MeetingPort;
   now?: () => number;
 }
 
@@ -66,6 +78,22 @@ interface PendingChoice {
 
 const PROJECT_ID = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
+/** One live meeting, between the store claim and the closing summary. */
+interface ActiveMeeting {
+  projectId: string;
+  projectName: string;
+  messageId: string;
+  startedAt: number;
+  /** The join attempt; resolves once the adapter has the browser up. */
+  joining?: Promise<MeetingHandle>;
+  handle?: MeetingHandle;
+  /** A terminal path already ran; later states must not repeat it. */
+  finished: boolean;
+  /** `/meet stop` is under way; adapter state events must not race it. */
+  stopping: boolean;
+  faceWarned: boolean;
+}
+
 
 export class CoreApp {
   private readonly store: Store;
@@ -74,8 +102,11 @@ export class CoreApp {
   private readonly config: Config;
   private readonly logger: Logger;
   private readonly launcher: LauncherPort | undefined;
+  private readonly meetingPort: MeetingPort | undefined;
   private readonly now: () => number;
   private controlChannel = "self";
+  /** The live meeting, if this process owns one. */
+  private activeMeeting: ActiveMeeting | undefined;
   /** The project this message is about (its channel, or the quoted project). */
   private currentProjectId: string | undefined;
   /** Channel the message being handled came from; replies go back there. */
@@ -90,6 +121,7 @@ export class CoreApp {
     this.config = deps.config;
     this.logger = deps.logger;
     this.launcher = deps.launcher;
+    this.meetingPort = deps.meeting;
     this.now = deps.now ?? (() => Date.now());
   }
 
@@ -111,10 +143,28 @@ export class CoreApp {
 
     await this.signal.start();
     await this.agent.start();
+    // A row a previous process left open would hold the one meeting slot for
+    // good; close it and tell the project's group, which is where it would have
+    // said so itself had it ended cleanly.
+    await this.reconcileMeetings();
     this.logger.info("core started", { channel: this.controlChannel });
   }
 
   async stop(): Promise<void> {
+    const active = this.activeMeeting;
+    if (active && !active.finished) {
+      // Leave the room first, then take the same terminal path as any other
+      // ending: the row closes, the link is wiped and the group is told why.
+      active.stopping = true;
+      await this.meetingPort?.stop();
+      try {
+        await this.finishMeeting(active, "left", "the connector stopped", true);
+      } catch (err: unknown) {
+        this.logger.warn("meeting: could not announce the shutdown", { error: String(err) });
+      }
+    } else {
+      await this.meetingPort?.stop();
+    }
     await this.agent.stop();
     await this.signal.stop();
   }
@@ -132,9 +182,13 @@ export class CoreApp {
     if (!msg.inControlChannel && !projectId) return;
     this.conversation = msg.channelId;
     this.currentProjectId = projectId;
-    this.logger.debug("control message", { text: msg.text, project: projectId });
 
     const parsed = parseInput(msg.text);
+    // The meeting link is a credential: it lives in the meeting row only, so the
+    // debug line records the command and never its argument.
+    const loggable =
+      parsed.kind === "command" && parsed.name === "meet" ? `/${parsed.name}` : msg.text;
+    this.logger.debug("control message", { text: loggable, project: projectId });
 
     if (parsed.kind === "approval") {
       if (this.pending().length > 0) {
@@ -218,6 +272,9 @@ export class CoreApp {
         return;
       case "stop":
         await this.stopTask();
+        return;
+      case "meet":
+        await this.meetCommand(args);
         return;
       default:
         await this.reply(HELP_TEXT);
@@ -501,6 +558,272 @@ export class CoreApp {
     await this.agent.abort(task.id);
     this.store.updateTask(task.id, { state: "aborted", updatedAt: this.now() });
     await this.reply(`Aborted task ${task.id}.`);
+  }
+
+  // --- meetings ------------------------------------------------------------
+
+  /** `/meet <link>` claims the one meeting slot and joins; `/meet stop` leaves. */
+  private async meetCommand(args: string): Promise<void> {
+    const trimmed = args.trim();
+    if (!trimmed) {
+      await this.reply("Usage: /meet <link>, or /meet stop");
+      return;
+    }
+    if (/^stop$/i.test(trimmed)) {
+      await this.stopMeeting();
+      return;
+    }
+
+    const project = this.activeProject();
+    if (!project) {
+      await this.reply("No project here. Send /meet in a project's group.");
+      return;
+    }
+
+    const open = this.store.getOpenMeeting();
+    if (open) {
+      await this.refuseMeeting(open);
+      return;
+    }
+    if (!this.meetingPort) {
+      await this.reply("Meetings are not available in this build.");
+      return;
+    }
+    const availability = await this.meetingPort.available();
+    if (!availability.available) {
+      // The refusal comes before any row is claimed, and never echoes the link.
+      await this.reply(`Could not join a meeting: ${availability.reason}.`, MARK.attention);
+      return;
+    }
+
+    const startedAt = this.now();
+    try {
+      // One atomic write decides who holds the meeting slot: the partial unique
+      // index refuses a second open row instead of racing a read-then-write.
+      this.store.claimMeeting({ projectId: project.id, link: trimmed, startedAt });
+    } catch {
+      const holder = this.store.getOpenMeeting();
+      if (holder) await this.refuseMeeting(holder);
+      else await this.reply("Could not claim the meeting slot. Try again.");
+      return;
+    }
+
+    // One editable message for the whole meeting; the group is also task traffic.
+    let sent: OutgoingMessage;
+    try {
+      sent = await this.sendProject(
+        project.id,
+        `${MARK.working} **Meeting** · joining as \`${project.name}\``,
+      );
+    } catch (err: unknown) {
+      // No message means no meeting to watch; free the slot rather than hold it.
+      this.store.closeMeeting(project.id, "could not post the meeting message", this.now());
+      throw err;
+    }
+    const active: ActiveMeeting = {
+      projectId: project.id,
+      projectName: project.name,
+      messageId: sent.messageId,
+      startedAt,
+      finished: false,
+      stopping: false,
+      faceWarned: false,
+    };
+    this.activeMeeting = active;
+
+    const joining = this.meetingPort.join({
+      projectId: project.id,
+      projectName: project.name,
+      link: trimmed,
+      onState: (event) => {
+        this.enqueue(() => this.onMeetingState(active, event));
+      },
+    });
+    active.joining = joining;
+    joining.then(
+      (handle) => {
+        active.handle = handle;
+      },
+      () => {
+        // A failure during a deliberate stop is the stop's story, not a second
+        // red "could not start" after the meeting has already ended.
+        if (active.stopping) return;
+        this.enqueue(() =>
+          this.finishMeeting(active, "failed", "could not start the avatar browser", true),
+        );
+      },
+    );
+    this.logger.info("meeting: claimed the slot", { project: project.name });
+  }
+
+  /** Refusal naming who holds the slot and since when — never the link. */
+  private async refuseMeeting(meeting: Meeting): Promise<void> {
+    const name = this.store.getProject(meeting.projectId)?.name ?? meeting.projectId;
+    const started = new Date(meeting.startedAt).toISOString().slice(11, 19);
+    await this.reply(
+      `A meeting is already open in ${name} (started ${started} UTC). Send /meet stop there first.`,
+      MARK.attention,
+    );
+  }
+
+  /**
+   * The adapter's states: joining is already on screen; every later state edits
+   * the same message, and a terminal one closes the row and adds one summary.
+   */
+  private async onMeetingState(
+    active: ActiveMeeting,
+    event: MeetingStateEvent,
+  ): Promise<void> {
+    if (active.finished || active.stopping) return;
+    if (event.state === "joining") {
+      // Progress needs no edit; a problem in the lobby (no join control) does.
+      if (event.detail) {
+        await this.editMeetingMessage(active, `${MARK.attention} **Meeting** · ${event.detail}`);
+      }
+      return;
+    }
+
+    if (event.state === "in-room") {
+      if (event.detail === "face not publishing") {
+        if (!active.faceWarned) {
+          active.faceWarned = true;
+          await this.editMeetingMessage(
+            active,
+            `${MARK.attention} **Meeting** · in the room, face not publishing`,
+          );
+        }
+        return;
+      }
+      active.faceWarned = false;
+      await this.editMeetingMessage(active, this.inRoomText(active, event));
+      return;
+    }
+
+    const outcome =
+      event.detail ?? (event.state === "left" ? "the room ended" : "the meeting failed");
+    await this.finishMeeting(active, event.state, outcome, event.state === "failed");
+  }
+
+  /** The in-room message carries the project's current task state beside it. */
+  private inRoomText(active: ActiveMeeting, event: MeetingStateEvent): string {
+    const unverified = event.verified === false ? " · unverified" : "";
+    const task =
+      this.store.getActiveTask(active.projectId) ?? this.latestTask(active.projectId);
+    const taskLine = task
+      ? statusLine(task, task.summary)
+      : "No task is running. Send one here and the meeting follows it.";
+    return `${MARK.ok} **Meeting** · in the room as \`${active.projectName}\`${unverified}\n${taskLine}`;
+  }
+
+  private async editMeetingMessage(active: ActiveMeeting, markup: string): Promise<void> {
+    const { text, styles } = renderStyled(markup);
+    try {
+      await this.signal.edit(this.channelFor(active.projectId), active.messageId, text, {
+        styles,
+      });
+    } catch (err: unknown) {
+      this.logger.warn("could not edit the meeting message", { error: String(err) });
+    }
+  }
+
+  /**
+   * The single terminal path: close the row (which wipes the link), end the
+   * lifecycle message, and post exactly one summary with duration and outcome.
+   */
+  private async finishMeeting(
+    active: ActiveMeeting,
+    state: "left" | "failed",
+    outcome: string,
+    problem: boolean,
+  ): Promise<void> {
+    if (active.finished) return;
+    active.finished = true;
+    const closedAt = this.now();
+    this.store.closeMeeting(active.projectId, outcome, closedAt);
+    if (this.activeMeeting === active) this.activeMeeting = undefined;
+
+    const mark = problem ? MARK.attention : MARK.ok;
+    await this.editMeetingMessage(active, `${mark} **Meeting** · ${outcome}`);
+    await this.sendProject(
+      active.projectId,
+      `${mark} **Meeting ended** · ${formatDuration(active.startedAt, closedAt)}\n${outcome}`,
+    );
+    this.logger.info("meeting ended", { project: active.projectName, state, outcome });
+  }
+
+  /** `/meet stop`: leave, close and wipe, then say how long it lasted. */
+  private async stopMeeting(): Promise<void> {
+    const active = this.activeMeeting;
+    if (!active) {
+      const open = this.store.getOpenMeeting();
+      if (!open) {
+        await this.reply("No meeting is running.");
+        return;
+      }
+      // A row without a handle (the adapter is gone) must still be freed.
+      const closedAt = this.now();
+      this.store.closeMeeting(open.projectId, "ended without a live browser", closedAt);
+      await this.sendProject(
+        open.projectId,
+        `${MARK.info} **Meeting ended** · ${formatDuration(open.startedAt, closedAt)}\nended without a live browser`,
+      );
+      return;
+    }
+
+    if (active.stopping) {
+      await this.reply("The meeting is already ending.");
+      return;
+    }
+    if (active.finished) {
+      await this.reply("No meeting is running.");
+      return;
+    }
+
+    active.stopping = true;
+    this.logger.info("meeting: leaving on request", { project: active.projectName });
+    let result: MeetingLeaveResult | undefined;
+    try {
+      const handle = active.handle ?? (await active.joining?.catch(() => undefined));
+      if (handle) result = await handle.leave();
+    } catch {
+      result = { closed: false, detail: "leaving failed" };
+    }
+    // No handle means the join never produced a browser; there is nothing to
+    // warn about, so a deliberate stop stays a clean ending.
+    const survivor = result ? !result.closed : false;
+    await this.finishMeeting(
+      active,
+      "left",
+      survivor ? "the browser may still be open" : "left by /meet stop",
+      survivor,
+    );
+  }
+
+  /**
+   * Startup reconciliation: a previous process may have died with a row open.
+   * Closing it frees the slot and tells the group, so the slot is never locked
+   * for good and the operator learns the meeting ended.
+   */
+  private async reconcileMeetings(): Promise<void> {
+    const closedAt = this.now();
+    const stale = this.store.closeOpenMeetings("interrupted by a restart", closedAt);
+    for (const meeting of stale) {
+      this.logger.warn("meeting: closed a row left open by a previous run", {
+        project: meeting.projectId,
+      });
+      try {
+        await this.sendProject(
+          meeting.projectId,
+          `${MARK.info} **Meeting ended** · ${formatDuration(meeting.startedAt, closedAt)}\nA previous run left this meeting open; it is closed now.`,
+        );
+      } catch (err: unknown) {
+        // The row is already free; a Signal hiccup must not stop the service.
+        this.logger.warn("meeting: could not announce the closed meeting", {
+          project: meeting.projectId,
+          error: String(err),
+        });
+      }
+    }
   }
 
   // --- agent events --------------------------------------------------------

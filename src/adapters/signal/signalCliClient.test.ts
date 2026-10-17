@@ -10,6 +10,7 @@ import {
   inboundMedia,
   mediaFileName,
   pollVoteFrom,
+  redactEnvelope,
   SignalCliClient,
 } from "./signalCliClient.js";
 import { isGroupId, quoteParams, targetParams } from "./signalCliClient.js";
@@ -134,6 +135,49 @@ describe("pollVoteFrom", () => {
   it("ignores a vote that does not name the poll", () => {
     expect(pollVoteFrom({ optionIndexes: [0] }, "+1000", 5)).toBeUndefined();
     expect(pollVoteFrom(undefined, "+1000", 5)).toBeUndefined();
+  });
+});
+
+describe("redactEnvelope", () => {
+  it("keeps a /meet link out of the debug envelope and preserves the rest", () => {
+    const envelope = {
+      sourceNumber: "+1000",
+      timestamp: 5,
+      dataMessage: {
+        message: "/meet https://meet.example/secret",
+        groupInfo: { groupId: "g1" },
+      },
+    };
+    expect(redactEnvelope(envelope)).toEqual({
+      sourceNumber: "+1000",
+      timestamp: 5,
+      dataMessage: {
+        message: "/meet [redacted]",
+        groupInfo: { groupId: "g1" },
+      },
+    });
+  });
+
+  it("redacts a note-to-self echo of the command too", () => {
+    const envelope = {
+      syncMessage: {
+        sentMessage: {
+          destinationNumber: "+1000",
+          message: "/meet https://meet.example/secret",
+          timestamp: 5,
+        },
+      },
+    };
+    expect(redactEnvelope(envelope).syncMessage?.sentMessage?.message).toBe("/meet [redacted]");
+    expect(redactEnvelope(envelope).syncMessage?.sentMessage?.destinationNumber).toBe("+1000");
+  });
+
+  it("leaves ordinary messages untouched", () => {
+    const envelope = { dataMessage: { message: "run the tests" } };
+    expect(redactEnvelope(envelope)).toBe(envelope);
+    expect(redactEnvelope({ dataMessage: { message: "/meeting notes" } })).toEqual({
+      dataMessage: { message: "/meeting notes" },
+    });
   });
 });
 

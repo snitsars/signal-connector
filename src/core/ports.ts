@@ -94,6 +94,58 @@ export interface LauncherPort {
   launch(project: Project): Promise<LaunchResult>;
 }
 
+/**
+ * Lifecycle of one meeting. The face in the room and the message in the group
+ * both follow this sequence: blue joining, green in the room, red on a problem.
+ */
+export type MeetingState = "joining" | "in-room" | "left" | "failed";
+
+export interface MeetingStateEvent {
+  state: MeetingState;
+  /** Why the state changed, in words fit for the operator. Never the link. */
+  detail?: string;
+  /**
+   * False when the room was inferred from a weak signal (the face publishing,
+   * or the page's own DOM changing) rather than positively detected.
+   */
+  verified?: boolean;
+}
+
+export interface JoinMeetingInput {
+  projectId: string;
+  projectName: string;
+  /** The room link. It must never reach a log line, a refusal or a group message. */
+  link: string;
+  onState: (event: MeetingStateEvent) => void;
+}
+
+export interface MeetingLeaveResult {
+  /** False when the browser survived the kill attempt and may still be in the room. */
+  closed: boolean;
+  detail?: string;
+}
+
+/** What a join returns: one handle that can take the avatar out of the room. */
+export interface MeetingHandle {
+  leave(): Promise<MeetingLeaveResult>;
+}
+
+export type MeetingAvailability =
+  | { available: true }
+  | { available: false; reason: string };
+
+/**
+ * Joins a meeting room as a drawn avatar. The core passes ids and names only;
+ * no browser, audio or provider type crosses this boundary (spine AD-1).
+ */
+export interface MeetingPort {
+  /** Can this machine join at all (a Chromium-based browser exists)? */
+  available(): Promise<MeetingAvailability>;
+  join(input: JoinMeetingInput): Promise<MeetingHandle>;
+  /** Shutdown: leave any room this adapter still holds, without reporting. */
+  stop(): Promise<void>;
+}
+
 export interface AgentPort {
   start(): Promise<void>;
   stop(): Promise<void>;

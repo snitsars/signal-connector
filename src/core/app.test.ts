@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { FakeAgent } from "../adapters/fakes/fakeAgent.js";
+import { FakeMeeting } from "../adapters/fakes/fakeMeeting.js";
 import { FakeSignal } from "../adapters/fakes/fakeSignal.js";
 import { ConfigSchema } from "../config/config.js";
-import type { LauncherPort } from "./ports.js";
+import type { LauncherPort, MeetingPort } from "./ports.js";
 import { nullLogger } from "../logging/logger.js";
 import { openStore, type Store } from "../store/store.js";
 import { CoreApp } from "./app.js";
@@ -17,6 +18,7 @@ function makeApp(
   projects = [{ name: "demo", path: "/tmp/demo" }],
   outbound: Record<string, unknown> = {},
   launcher?: LauncherPort,
+  meeting?: MeetingPort,
 ) {
   const store: Store = openStore(":memory:");
   storeRef = store;
@@ -35,6 +37,7 @@ function makeApp(
     config,
     logger: nullLogger(),
     ...(launcher ? { launcher } : {}),
+    ...(meeting ? { meeting } : {}),
   });
   return { store, signal, agent, app };
 }
@@ -818,5 +821,387 @@ describe("CoreApp", () => {
     expect(ctx.agent.started).toHaveLength(1);
     expect(ctx.agent.started[0]?.prompt).toBe("add a retry");
     expect(ctx.agent.started[0]?.project.id).toBe("demo");
+  });
+});
+
+describe("meetings", () => {
+  const LINK = "https://meet.example/room-abc";
+  let meeting: FakeMeeting;
+  let ctx: ReturnType<typeof makeApp>;
+
+  /** A started app whose demo project already owns its own group. */
+  async function openProject(): Promise<void> {
+    meeting = new FakeMeeting();
+    ctx = makeApp(undefined, {}, undefined, meeting);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+  }
+
+  const meetingMessage = () =>
+    ctx.signal.sent.find((m) => m.text.includes("Meeting ·"));
+
+  it("joins the link, holds it in the row and edits one message through the lifecycle", async () => {
+    await openProject();
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+
+    expect(meeting.joins).toEqual([{ projectId: "demo", projectName: "demo", link: LINK }]);
+    expect(ctx.store.getOpenMeeting()).toEqual({
+      projectId: "demo",
+      link: LINK,
+      startedAt: expect.any(Number),
+    });
+
+    // One message, in the project's own group, and it never carries the link.
+    const message = meetingMessage()!;
+    expect(message.channelId).toBe("group-1-demo");
+    expect(message.text).toContain("joining as demo");
+    expect(ctx.signal.sent.filter((m) => m.text.includes("Meeting ·"))).toHaveLength(1);
+    expect(ctx.signal.sent.every((m) => !m.text.includes("meet.example"))).toBe(true);
+
+    meeting.admit();
+    await tick();
+
+    // The same message is edited in place, not repeated.
+    expect(meetingMessage()).toBe(message);
+    expect(message.edited).toBe(true);
+    expect(message.text).toContain("in the room as demo");
+    expect(ctx.signal.sent.filter((m) => m.text.includes("Meeting ·"))).toHaveLength(1);
+
+    await ctx.app.stop();
+  });
+
+  it("shows the project's current task state in the in-room message", async () => {
+    await openProject();
+    ctx.signal.emitMessage(incoming("add a retry"));
+    await tick();
+    const taskId = ctx.agent.started[0]!.taskId;
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    meeting.admit();
+    await tick();
+
+    const text = meetingMessage()?.text ?? "";
+    expect(text).toContain("in the room");
+    expect(text).toContain(taskId.slice(0, 8));
+    await ctx.app.stop();
+  });
+
+  it("refuses a second link with the holding project and its start time", async () => {
+    await openProject();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    const joins = meeting.joins.length;
+
+    ctx.signal.emitMessage(incoming("/meet https://meet.example/second"));
+    await tick();
+
+    expect(meeting.joins).toHaveLength(joins);
+    const refusal = ctx.signal.sent.at(-1)!;
+    expect(refusal.text).toContain("already open in demo");
+    expect(refusal.text).toMatch(/started \d{2}:\d{2}:\d{2}/);
+    expect(refusal.text).not.toContain("meet.example");
+    expect(ctx.store.getOpenMeeting()?.link).toBe(LINK);
+    await ctx.app.stop();
+  });
+
+  it("refuses a link sent from another project while a meeting is open", async () => {
+    meeting = new FakeMeeting();
+    ctx = makeApp(
+      [
+        { name: "demo", path: "/tmp/demo" },
+        { name: "other", path: "/tmp/other" },
+      ],
+      {},
+      undefined,
+      meeting,
+    );
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    ctx.signal.emitMessage(incoming("/open other"));
+    await tick();
+
+    ctx.signal.emitMessage(
+      incomingIn("group-2-other", "/meet https://meet.example/third"),
+    );
+    await tick();
+
+    expect(meeting.joins).toHaveLength(1);
+    const refusal = ctx.signal.sent.at(-1)!;
+    expect(refusal.channelId).toBe("group-2-other");
+    expect(refusal.text).toContain("already open in demo");
+    expect(ctx.store.getOpenMeeting()?.link).toBe(LINK);
+    await ctx.app.stop();
+  });
+
+  it("asks for usage on a bare /meet and writes no row", async () => {
+    await openProject();
+    ctx.signal.emitMessage(incoming("/meet"));
+    await tick();
+    expect(ctx.signal.sent.at(-1)?.text).toContain("Usage: /meet");
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(meeting.joins).toHaveLength(0);
+  });
+
+  it("asks for a project before joining", async () => {
+    meeting = new FakeMeeting();
+    ctx = makeApp(undefined, {}, undefined, meeting);
+    await ctx.app.start();
+
+    ctx.signal.emitMessage(incomingIn("self", `/meet ${LINK}`, true));
+    await tick();
+    expect(ctx.signal.sent.at(-1)?.text).toContain("No project here");
+    expect(meeting.joins).toHaveLength(0);
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+  });
+
+  it("refuses before claiming a row when no browser is installed", async () => {
+    meeting = new FakeMeeting();
+    meeting.unavailableReason = "neither Chrome nor Edge was found on this machine";
+    ctx = makeApp(undefined, {}, undefined, meeting);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+
+    expect(ctx.signal.sent.at(-1)?.text).toContain("neither Chrome nor Edge was found");
+    expect(meeting.joins).toHaveLength(0);
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+  });
+
+  it("leaves on /meet stop, wipes the link and posts exactly one summary", async () => {
+    await openProject();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    meeting.admit();
+    await tick();
+    const message = meetingMessage()!;
+
+    ctx.signal.emitMessage(incoming("/meet stop"));
+    await tick();
+    await tick();
+
+    expect(meeting.leaves).toEqual(["demo"]);
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(message.text).toContain("left by /meet stop");
+
+    const summaries = ctx.signal.sent.filter((m) => m.text.includes("Meeting ended"));
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.text).toContain("left by /meet stop");
+    expect(summaries[0]!.text).toMatch(/\d+s/);
+    expect(summaries[0]!.text.startsWith("🟢")).toBe(true);
+
+    // A later stop only says it is over: no second summary, no second leave.
+    ctx.signal.emitMessage(incoming("/meet stop"));
+    await tick();
+    expect(ctx.signal.sent.at(-1)?.text).toContain("No meeting is running");
+    expect(ctx.signal.sent.filter((m) => m.text.includes("Meeting ended"))).toHaveLength(1);
+    await ctx.app.stop();
+  });
+
+  it("says the room may still be open when the browser survives leave", async () => {
+    await openProject();
+    meeting.surviveLeave = true;
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    ctx.signal.emitMessage(incoming("/meet stop"));
+    await tick();
+    await tick();
+
+    const summary = ctx.signal.sent.find((m) => m.text.includes("Meeting ended"))!;
+    expect(summary.text).toContain("the browser may still be open");
+    expect(summary.text.startsWith("🔴")).toBe(true);
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    await ctx.app.stop();
+  });
+
+  it("closes a stale row on stop even when no handle is left", async () => {
+    await openProject();
+    ctx.store.claimMeeting({
+      projectId: "demo",
+      link: LINK,
+      startedAt: Date.now() - 5_000,
+    });
+
+    ctx.signal.emitMessage(incoming("/meet stop"));
+    await tick();
+
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    const summary = ctx.signal.sent.at(-1)!;
+    expect(summary.text).toContain("ended without a live browser");
+    expect(summary.text).not.toContain("meet.example");
+    expect(meeting.leaves).toHaveLength(0);
+  });
+
+  it("closes the row and names the reason when the join fails", async () => {
+    await openProject();
+    meeting.failJoin = true;
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(meetingMessage()?.text).toContain("could not start the avatar browser");
+    const summary = ctx.signal.sent.find((m) => m.text.includes("Meeting ended"))!;
+    expect(summary.text).toContain("could not start the avatar browser");
+    expect(summary.text.startsWith("🔴")).toBe(true);
+    await ctx.app.stop();
+  });
+
+  it("takes the same terminal path when the browser ends by itself", async () => {
+    await openProject();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    meeting.admit();
+    await tick();
+
+    meeting.die("the call ended");
+    await tick();
+    await tick();
+
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    const summaries = ctx.signal.sent.filter((m) => m.text.includes("Meeting ended"));
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.text).toContain("the call ended");
+    expect(summaries[0]!.text).toMatch(/\d+s/);
+    await ctx.app.stop();
+  });
+
+  it("reports the admission timeout as one terminal outcome", async () => {
+    await openProject();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+
+    meeting.fail("nobody admitted the avatar within 90 s");
+    await tick();
+    await tick();
+
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    const summary = ctx.signal.sent.find((m) => m.text.includes("Meeting ended"))!;
+    expect(summary.text).toContain("nobody admitted the avatar within 90 s");
+    expect(summary.text.startsWith("🔴")).toBe(true);
+    await ctx.app.stop();
+  });
+
+  it("reports a face that stops publishing without ending the meeting", async () => {
+    await openProject();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    meeting.admit();
+    await tick();
+
+    meeting.faceStopped();
+    await tick();
+
+    expect(meetingMessage()?.text).toContain("face not publishing");
+    expect(ctx.store.getOpenMeeting()).not.toBeUndefined();
+    expect(ctx.signal.sent.some((m) => m.text.includes("Meeting ended"))).toBe(false);
+    await ctx.app.stop();
+  });
+
+  it("says when the room offered no join control, and keeps the meeting open", async () => {
+    await openProject();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+
+    meeting.joinNeedsHelp();
+    await tick();
+
+    expect(meetingMessage()?.text).toContain("could not find the join control");
+    expect(ctx.store.getOpenMeeting()).not.toBeUndefined();
+    expect(ctx.signal.sent.some((m) => m.text.includes("Meeting ended"))).toBe(false);
+    await ctx.app.stop();
+  });
+
+  it("does not report a failed start when the operator stops while joining", async () => {
+    await openProject();
+    meeting.failJoin = true;
+    meeting.joinDelayMs = 30;
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick(); // the claim is written and the join is still in flight
+    ctx.signal.emitMessage(incoming("/meet stop"));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await tick();
+
+    expect(
+      ctx.signal.sent.some((m) => m.text.includes("could not start the avatar browser")),
+    ).toBe(false);
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    const summaries = ctx.signal.sent.filter((m) => m.text.includes("Meeting ended"));
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.text).toContain("left by /meet stop");
+    expect(summaries[0]!.text.startsWith("🟢")).toBe(true);
+  });
+
+  it("ends the meeting out loud when the connector stops", async () => {
+    await openProject();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    meeting.admit();
+    await tick();
+
+    await ctx.app.stop();
+
+    expect(meeting.leaves).toHaveLength(0); // the adapter's own stop path closed it
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    const summary = ctx.signal.sent.find((m) => m.text.includes("Meeting ended"));
+    expect(summary?.text).toContain("the connector stopped");
+    expect(summary?.text).toMatch(/\d+s/);
+  });
+
+  it("closes a row a previous run left open and says so in the project's group", async () => {
+    meeting = new FakeMeeting();
+    ctx = makeApp(undefined, {}, undefined, meeting);
+    ctx.store.upsertProject({ id: "demo", name: "demo", path: "/tmp/demo" });
+    ctx.store.setChannel("demo", "group-stale", "demo");
+    ctx.store.claimMeeting({
+      projectId: "demo",
+      link: LINK,
+      startedAt: Date.now() - 60_000,
+    });
+
+    await ctx.app.start();
+
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    const notice = ctx.signal.sent.find((m) =>
+      m.text.includes("previous run left this meeting open"),
+    );
+    expect(notice?.channelId).toBe("group-stale");
+    expect(notice?.text).not.toContain("meet.example");
+
+    // The slot is free again in the same run.
+    ctx.signal.emitMessage({
+      id: "stale-1",
+      channelId: "group-stale",
+      sender: "+1000",
+      text: `/meet ${LINK}`,
+      at: Date.now(),
+      inControlChannel: false,
+    });
+    await tick();
+    await tick();
+    expect(meeting.joins.at(-1)?.link).toBe(LINK);
+    await ctx.app.stop();
   });
 });

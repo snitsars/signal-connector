@@ -10,6 +10,7 @@ import { readFileSync, writeSync } from "node:fs";
 import path from "node:path";
 import { createAgentAdapter } from "./adapters/agent/factory.js";
 import { ProjectLaunchers } from "./adapters/launcher/registry.js";
+import { BrowserMeeting } from "./adapters/meeting/browserMeeting.js";
 import { SignalCliDaemon } from "./adapters/signal/daemon.js";
 import { SignalCliClient } from "./adapters/signal/signalCliClient.js";
 import { BridgeHub } from "./bridge/hub.js";
@@ -116,6 +117,12 @@ async function main(): Promise<void> {
     config,
     logger,
     launcher: new ProjectLaunchers(config, logger),
+    meeting: new BrowserMeeting({
+      // The browser's only footprint: its own profile under the data dir, never
+      // the operator's, and safe to delete at any time.
+      profileDir: path.join(dir, "meeting-profile"),
+      logger,
+    }),
   });
   await app.start();
 

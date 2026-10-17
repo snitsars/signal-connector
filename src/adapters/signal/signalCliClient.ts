@@ -136,6 +136,40 @@ export function inboundMedia(
 }
 
 /**
+ * A message whose text is a `/meet` command carries the room link as its
+ * argument, so it must never be written to the log file verbatim.
+ */
+function isMeetCommand(text: string | undefined): boolean {
+  return typeof text === "string" && /^\/meet\b/i.test(text.trim());
+}
+
+/** Replace the command's argument while leaving the rest of the text intact. */
+const REDACTED_MEET = "/meet [redacted]";
+
+/**
+ * The envelope as it may be logged: a `/meet` command's text is replaced in
+ * both the ordinary and the note-to-self delivery paths. Every other field —
+ * source, timestamp, group, reactions, attachments — is untouched.
+ */
+export function redactEnvelope(envelope: Envelope): Envelope {
+  const redactData = isMeetCommand(envelope.dataMessage?.message);
+  const redactSent = isMeetCommand(envelope.syncMessage?.sentMessage?.message);
+  if (!redactData && !redactSent) return envelope;
+
+  const copy: Envelope = { ...envelope };
+  if (redactData && envelope.dataMessage) {
+    copy.dataMessage = { ...envelope.dataMessage, message: REDACTED_MEET };
+  }
+  if (redactSent && envelope.syncMessage?.sentMessage) {
+    copy.syncMessage = {
+      ...envelope.syncMessage,
+      sentMessage: { ...envelope.syncMessage.sentMessage, message: REDACTED_MEET },
+    };
+  }
+  return copy;
+}
+
+/**
  * Map a raw poll vote to the domain vote. Signal reports 0-based option indexes;
  * the domain keeps them 1-based so the core can match the order it sent.
  */
@@ -348,7 +382,7 @@ export class SignalCliClient implements SignalPort {
 
   private async dispatch(raw: Envelope): Promise<void> {
     const env = raw.envelope ?? raw;
-    this.opts.logger.debug("signal envelope", { envelope: env });
+    this.opts.logger.debug("signal envelope", { envelope: redactEnvelope(env) });
 
     const data = env.dataMessage;
     if (data) {

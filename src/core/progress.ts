@@ -41,12 +41,17 @@ export function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
-/** How long the task took, for the completion line. */
-export function duration(task: Task): string {
-  const seconds = Math.max(0, Math.round((task.updatedAt - task.startedAt) / 1000));
+/** How long something took, for a completion or closing line. */
+export function formatDuration(startedAt: number, endedAt: number): string {
+  const seconds = Math.max(0, Math.round((endedAt - startedAt) / 1000));
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   return `${minutes}m ${seconds % 60}s`;
+}
+
+/** How long the task took, for the completion line. */
+export function duration(task: Task): string {
+  return formatDuration(task.startedAt, task.updatedAt);
 }
 
 export function milestoneText(event: AgentEvent): string | undefined {

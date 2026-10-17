@@ -44,6 +44,7 @@ export const KNOWN_COMMANDS = [
   "stop",
   "new",
   "projects",
+  "meet",
   "help",
 ] as const;
 
@@ -58,6 +59,8 @@ export const HELP_TEXT = [
   "/approve | /deny | /always — answer a permission prompt",
   "/models — list this project's models and pick one",
   "/model <number|provider/id> — switch this session's model",
+  "/meet <link> — join that room as this project's avatar",
+  "/meet stop — leave the room and post one summary",
   "/help — this message",
   "Each project talks in its own group; anything you send there is about that project.",
 ].join("\n");

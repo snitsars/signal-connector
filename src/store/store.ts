@@ -42,7 +42,31 @@ CREATE TABLE IF NOT EXISTS kv (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS meetings (
+  project_id TEXT NOT NULL,
+  link TEXT,
+  started_at INTEGER NOT NULL,
+  closed_at INTEGER,
+  outcome TEXT
+);
+-- One meeting at a time: every open row has the same key, so the second claim
+-- is a failed write rather than a read-then-write race. Closed rows are exempt.
+CREATE UNIQUE INDEX IF NOT EXISTS meetings_one_open
+  ON meetings ((closed_at IS NULL)) WHERE closed_at IS NULL;
 `;
+
+/** A meeting row. The link is the credential and only lives while the row is open. */
+export interface Meeting {
+  projectId: string;
+  link: string;
+  startedAt: number;
+}
+
+export interface MeetingClaim {
+  projectId: string;
+  link: string;
+  startedAt: number;
+}
 
 export interface Store {
   upsertProject(project: Project): void;
@@ -64,6 +88,17 @@ export interface Store {
 
   setApproval(projectId: string, tool: string, decision: string): void;
   getApproval(projectId: string, tool: string): string | undefined;
+
+  /**
+   * Claim the one open meeting slot. Throws when another meeting is open: the
+   * partial unique index makes that a failed write, not a race with a read.
+   */
+  claimMeeting(claim: MeetingClaim): void;
+  getOpenMeeting(): Meeting | undefined;
+  /** Close the project's open meeting and wipe its link. False when none was open. */
+  closeMeeting(projectId: string, outcome: string, closedAt?: number): boolean;
+  /** Startup reconciliation: close every row a previous process left open. */
+  closeOpenMeetings(outcome: string, closedAt?: number): Meeting[];
 
   getValue(key: string): string | undefined;
   setValue(key: string, value: string): void;
@@ -88,6 +123,15 @@ function rowToTask(row: Record<string, unknown>): Task {
   if (row.summary != null) task.summary = String(row.summary);
   if (row.error != null) task.error = String(row.error);
   return task;
+}
+
+function rowToMeeting(row: Record<string, unknown>): Meeting {
+  return {
+    projectId: String(row.project_id),
+    // An open row always has a link; a wiped one is never returned as open.
+    link: row.link == null ? "" : String(row.link),
+    startedAt: Number(row.started_at),
+  };
 }
 
 export function openStore(path: string): Store {
@@ -196,6 +240,39 @@ export function openStore(path: string): Store {
         .prepare(`SELECT decision FROM approvals WHERE project_id = ? AND tool = ?`)
         .get(projectId, tool);
       return row ? String(row.decision) : undefined;
+    },
+
+    claimMeeting(claim) {
+      db.prepare(
+        `INSERT INTO meetings (project_id, link, started_at, closed_at, outcome)
+         VALUES (?, ?, ?, NULL, NULL)`,
+      ).run(claim.projectId, claim.link, claim.startedAt);
+    },
+    getOpenMeeting() {
+      const row = db
+        .prepare(`SELECT * FROM meetings WHERE closed_at IS NULL LIMIT 1`)
+        .get();
+      return row ? rowToMeeting(row) : undefined;
+    },
+    closeMeeting(projectId, outcome, closedAt = Date.now()) {
+      const result = db
+        .prepare(
+          `UPDATE meetings SET link = NULL, closed_at = ?, outcome = ?
+           WHERE project_id = ? AND closed_at IS NULL`,
+        )
+        .run(closedAt, outcome, projectId);
+      return Number((result as { changes?: number }).changes ?? 0) > 0;
+    },
+    closeOpenMeetings(outcome, closedAt = Date.now()) {
+      const open = db
+        .prepare(`SELECT * FROM meetings WHERE closed_at IS NULL`)
+        .all()
+        .map(rowToMeeting);
+      db.prepare(
+        `UPDATE meetings SET link = NULL, closed_at = ?, outcome = ?
+         WHERE closed_at IS NULL`,
+      ).run(closedAt, outcome);
+      return open;
     },
 
     getValue(key) {
