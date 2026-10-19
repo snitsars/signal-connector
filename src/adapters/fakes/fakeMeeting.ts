@@ -3,6 +3,7 @@
  * browser, can be admitted on its own, and can die mid-meeting.
  */
 import type {
+  AvatarMood,
   JoinMeetingInput,
   MeetingAvailability,
   MeetingHandle,
@@ -21,6 +22,8 @@ export interface FakeJoin {
 export class FakeMeeting implements MeetingPort {
   readonly joins: FakeJoin[] = [];
   readonly leaves: string[] = [];
+  /** Every mood the core asked the avatar to show, in order. */
+  readonly moods: AvatarMood[] = [];
   /** How many times the core asked whether a browser is available. */
   availableCalls = 0;
   /** Set to refuse availability, as a machine without Chrome or Edge would. */
@@ -74,6 +77,9 @@ export class FakeMeeting implements MeetingPort {
         return this.surviveLeave
           ? { closed: false, detail: "the browser did not exit; the room may still be open" }
           : { closed: true };
+      },
+      setMood: async (mood): Promise<void> => {
+        this.moods.push(mood);
       },
     };
   }

@@ -20,6 +20,7 @@ import type {
 } from "../domain/types.js";
 import type {
   AgentPort,
+  AvatarMood,
   LauncherPort,
   MeetingHandle,
   MeetingLeaveResult,
@@ -95,6 +96,14 @@ interface PendingChoice {
 }
 
 const PROJECT_ID = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
+/** The avatar's mood for the tool opencode is running. */
+function moodForTool(tool: string): AvatarMood {
+  const name = tool.toLowerCase();
+  if (/read|grep|glob|list|search|fetch|websearch|webfetch/.test(name)) return "reading";
+  if (/write|edit|patch|bash|shell|apply/.test(name)) return "writing";
+  return "thinking";
+}
 
 /**
  * Fit a description into the budget reserved for it in a spoken announcement,
@@ -553,6 +562,7 @@ export class CoreApp {
     }
 
     const { messageId } = await this.sendProject(project.id, statusLine(task, "queued"));
+    this.setAvatarMood(project.id, "thinking");
     this.store.setValue(`statusMsg:${task.id}`, messageId);
     this.logger.info("task started", { taskId: task.id, project: project.name });
     return task;
@@ -1182,6 +1192,21 @@ export class CoreApp {
   }
 
   /**
+   * What the avatar shows on screen while the agent works. Fire-and-forget: a
+   * paint must never hold the event chain, and a page that is navigating just
+   * misses one frame.
+   */
+  private setAvatarMood(projectId: string, mood: AvatarMood): void {
+    const active = this.activeMeeting;
+    if (!active || active.finished || active.projectId !== projectId) return;
+    const handle = active.handle;
+    if (!handle) return;
+    void handle.setMood(mood).catch((err: unknown) => {
+      this.logger.warn("meeting: mood failed", { error: String(err) });
+    });
+  }
+
+  /**
    * Say something into the room of the meeting hearing this project. Fire and
    * forget: awaiting synthesis here would block `/meet stop`, approvals and
    * every later event, so a slow or held clip must never hold the chain. A
@@ -1362,7 +1387,13 @@ export class CoreApp {
     if (!task) return;
     this.store.setValue(`latestTask:${task.projectId}`, task.id);
 
+    // The avatar shows what the agent is doing: reading, writing or thinking.
+    if (event.type === "tool" && event.tool) {
+      this.setAvatarMood(task.projectId, moodForTool(event.tool));
+    }
+
     if (event.type === "permission") {
+      this.setAvatarMood(task.projectId, "thinking");
       await this.handlePermission(event, task);
       return;
     }
@@ -1385,6 +1416,7 @@ export class CoreApp {
       // A spoken question is answered aloud once the work finishes; the group
       // already has the full text, so this never holds up the event chain.
       this.speakOutcome(done);
+      this.setAvatarMood(done.projectId, "listening");
       if (event.diffPath) {
         await this.signal.attach(this.channelFor(task.projectId), event.diffPath, "📄 Working diff");
       }
@@ -1404,6 +1436,7 @@ export class CoreApp {
       // A failure of a spoken task is spoken too, so the room is not left
       // waiting for an answer that will not come.
       this.speakOutcome(failed);
+      this.setAvatarMood(failed.projectId, "listening");
       return;
     }
 

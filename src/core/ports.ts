@@ -158,9 +158,17 @@ export interface MeetingLeaveResult {
   detail?: string;
 }
 
+/** What the avatar shows while the agent works; the page draws each one. */
+export type AvatarMood = "listening" | "thinking" | "reading" | "writing";
+
 /** What a join returns: one handle that can take the avatar out of the room. */
 export interface MeetingHandle {
   leave(): Promise<MeetingLeaveResult>;
+  /**
+   * What the avatar should show while the agent works. The page draws speaking
+   * from its own audio state, so "speaking" is not a mood the core sets.
+   */
+  setMood(mood: AvatarMood): Promise<void>;
 }
 
 export type MeetingAvailability =

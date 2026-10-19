@@ -14,6 +14,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type {
+  AvatarMood,
   JoinMeetingInput,
   MeetingAvailability,
   MeetingHandle,
@@ -33,6 +34,7 @@ import {
   JOIN_CLICK_EXPRESSION,
   LIVENESS_EXPRESSION,
   PRESENCE_EXPRESSION,
+  setMoodExpression,
   setStateExpression,
   SPEECH_STATE_EXPRESSION,
   speakExpression,
@@ -335,7 +337,10 @@ export class BrowserMeeting implements MeetingPort {
       void this.poll(session);
     }, this.pollMs);
 
-    return { leave: () => this.leave(session) };
+    return {
+      leave: () => this.leave(session),
+      setMood: (mood) => this.setMood(session, mood),
+    };
   }
 
   async stop(): Promise<void> {
@@ -696,6 +701,21 @@ export class BrowserMeeting implements MeetingPort {
       await session.page?.evaluate(setStateExpression(state));
     } catch {
       // The face is best-effort; the group message still carries the state.
+    }
+  }
+
+  /**
+   * Tell the page what the avatar should be doing. It is a paint, not a
+   * contract: a page that has navigated or does not know the mood keeps its
+   * face and the agent's work continues.
+   */
+  private async setMood(session: Session, mood: AvatarMood): Promise<void> {
+    const page = session.page;
+    if (!page) return;
+    try {
+      await page.evaluate(setMoodExpression(mood));
+    } catch {
+      /* the page may be navigating; the next mood lands on the new document */
     }
   }
 

@@ -1547,6 +1547,23 @@ describe("voice in the meeting", () => {
     await ctx.app.stop();
   });
 
+  it("shows the agent's work on the avatar", async () => {
+    await inRoom();
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const taskId = ctx.agent.started.at(-1)!.taskId;
+
+    ctx.agent.emit({ type: "tool", taskId, at: Date.now(), tool: "read" });
+    await tick();
+    ctx.agent.emit({ type: "tool", taskId, at: Date.now(), tool: "edit" });
+    await tick();
+    ctx.agent.emit({ type: "idle", taskId, at: Date.now(), summary: "done" });
+    await tick();
+
+    expect(meeting.moods).toEqual(["thinking", "reading", "writing", "listening"]);
+    await ctx.app.stop();
+  });
+
   it("starts listening when the avatar is in the room", async () => {
     await inRoom();
     expect(voice.started).toEqual([{ projectId: "demo", projectName: "demo" }]);

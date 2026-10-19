@@ -10,6 +10,7 @@ import {
   JOIN_CLICK_EXPRESSION,
   LIVENESS_EXPRESSION,
   PRESENCE_EXPRESSION,
+  setMoodExpression,
   setStateExpression,
   SPEECH_STATE_EXPRESSION,
   speakExpression,
@@ -39,7 +40,11 @@ describe("buildAvatarScript", () => {
   it("does not animate: state changes alone repaint the face", () => {
     const script = buildAvatarScript();
     expect(script).not.toMatch(/requestAnimationFrame/);
-    expect(script).not.toMatch(/setInterval|setTimeout/);
+    expect(script).toMatch(/setInterval/);
+    for (const mood of ["listening", "thinking", "reading", "writing"]) {
+      expect(script).toContain(mood);
+    }
+    expect(script).toContain("setMood");
   });
 
   it("publishes a liveness flag the connector can check", () => {
@@ -274,8 +279,7 @@ describe("ADMISSION_EXPRESSION", () => {
     expect(run(page("You left the call\nRejoin\nReturn to home screen"))).toBe("ended");
   });
 
-  it("admits only the call's own leave control", () => {
-    expect(run(page("", [{ label: "Leave call" }]))).toBe("in-room");
+  it("admits only the call's own leave control", () => {    expect(run(page("", [{ label: "Leave call" }]))).toBe("in-room");
     // Jitsi's wording carries "the"; missing it left the avatar stuck outside.
     expect(run(page("", [{ label: "Leave the call" }]))).toBe("in-room");
     expect(run(page("", [{ label: "Leave the meeting" }]))).toBe("in-room");
@@ -977,5 +981,21 @@ describe("the audio level between reads", () => {
     // A track that ended is no longer a live room, even though the processor lives.
     track.end();
     expect(avatar.hearing().active).toBe(false);
+  });
+});
+
+describe("setMoodExpression", () => {
+  const run = (mood: string, window: unknown) =>
+    (new Function("window", `return ${setMoodExpression(mood as never)};`) as (w: unknown) => string)(window);
+
+  it("sets a known mood on the avatar", () => {
+    const moods: string[] = [];
+    const avatar = { setMood: (m: string) => { moods.push(m); return m; } };
+    expect(run("reading", { __signalConnectorAvatar: avatar })).toBe("reading");
+    expect(moods).toEqual(["reading"]);
+  });
+
+  it("falls back to listening when the page no longer has the avatar", () => {
+    expect(run("writing", {})).toBe("listening");
   });
 });

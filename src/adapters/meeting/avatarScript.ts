@@ -1,15 +1,17 @@
 /**
  * The avatar the room sees as its camera.
  *
- * A canvas face is drawn once per state change — no animation loop, because a
- * covered window throttles timers and motion would then be a lie. `setState`
- * repaints in the connector's colours (blue joining, green in the room, red on
- * a problem) and asks the capture track for one frame. The script also replaces
- * `getUserMedia`: video is answered with `canvas.captureStream()` and audio with
- * a silent synthetic track, so the room gets a face and a microphone that never
- * touches the machine's own camera or microphone.
+ * A canvas face is drawn on every state change and, while the avatar is in the
+ * room, eight times a second so the mood reads as motion: thought bubbles,
+ * a turning book, a laptop, sound waves, and a mouth that moves while the
+ * avatar speaks. `setState` repaints in the connector's colours (blue joining,
+ * green in the room, red on a problem) and asks the capture track for one frame.
+ * The script also replaces `getUserMedia`: video is answered with
+ * `canvas.captureStream()` and audio with a silent synthetic track, so the room
+ * gets a face and a microphone that never touches the machine's own camera or
+ * microphone.
  */
-import type { MeetingState } from "../../core/ports.js";
+import type { AvatarMood, MeetingState } from "../../core/ports.js";
 
 /** The states the face can paint; "left" has no face because the window is gone. */
 export type FaceState = Extract<MeetingState, "joining" | "in-room" | "failed">;
@@ -24,6 +26,9 @@ export const FACE_COLOURS: Record<FaceState, string> = {
 /** Where the injected script parks its API on the page. */
 export const AVATAR_GLOBAL = "__signalConnectorAvatar";
 
+/** What the avatar shows while the agent works; the page draws each one. */
+export const AVATAR_MOODS: ReadonlyArray<AvatarMood> = ["listening", "thinking", "reading", "writing"];
+
 /**
  * The script injected with `Page.addScriptToEvaluateOnNewDocument`, so it runs
  * before the room's own scripts can ask for a camera.
@@ -35,6 +40,9 @@ export function buildAvatarScript(): string {
   const COLOURS = ${JSON.stringify(FACE_COLOURS)};
   const state = {
     name: "joining",
+    mood: "listening",
+    tick: 0,
+    timer: null,
     track: null,
     live: false,
     canvas: null,
@@ -58,6 +66,8 @@ export function buildAvatarScript(): string {
     return canvas;
   };
 
+  const MOODS = ["listening", "thinking", "reading", "writing"];
+
   const draw = () => {
     const canvas = ensureCanvas();
     const ctx = state.ctx;
@@ -66,33 +76,100 @@ export function buildAvatarScript(): string {
     ctx.fillStyle = colour;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+    const tick = state.tick;
+    const speaking = typeof speech !== "undefined" && !!speech.playing;
+    const mood =
+      state.name === "in-room" ? (speaking ? "speaking" : state.mood) : state.name;
+
+    // Shoulders.
+    ctx.fillStyle = "rgba(15,23,42,0.25)";
+    ctx.beginPath();
+    ctx.arc(320, 330, 140, 0, Math.PI * 2);
+    ctx.fill();
+
     // Head.
     ctx.fillStyle = "#f8fafc";
     ctx.beginPath();
-    ctx.arc(320, 158, 92, 0, Math.PI * 2);
+    ctx.arc(320, 150, 84, 0, Math.PI * 2);
     ctx.fill();
 
-    // Eyes.
+    // Eyes: looking down at a book or a keyboard.
     ctx.fillStyle = "#0f172a";
-    ctx.beginPath();
-    ctx.arc(288, 142, 12, 0, Math.PI * 2);
-    ctx.arc(352, 142, 12, 0, Math.PI * 2);
-    ctx.fill();
-
-    // The mouth carries the state: waiting, in the room, or a problem.
-    ctx.strokeStyle = "#0f172a";
-    ctx.lineWidth = 8;
-    ctx.lineCap = "round";
-    ctx.beginPath();
-    if (state.name === "in-room") {
-      ctx.arc(320, 186, 42, 0.15 * Math.PI, 0.85 * Math.PI);
-    } else if (state.name === "failed") {
-      ctx.arc(320, 236, 42, 1.15 * Math.PI, 1.85 * Math.PI);
-    } else {
-      ctx.moveTo(284, 206);
-      ctx.lineTo(356, 206);
+    const down = mood === "reading" || mood === "writing";
+    for (const x of [292, 348]) {
+      ctx.beginPath();
+      ctx.arc(x, down ? 148 : 138, down ? 8 : 11, 0, Math.PI * 2);
+      ctx.fill();
     }
-    ctx.stroke();
+
+    // Mouth: the answer moves it, a failure frowns.
+    ctx.lineCap = "round";
+    if (state.name === "failed") {
+      ctx.strokeStyle = "#0f172a";
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.arc(320, 226, 40, 1.15 * Math.PI, 1.85 * Math.PI);
+      ctx.stroke();
+    } else if (mood === "speaking") {
+      ctx.fillStyle = "#0f172a";
+      ctx.beginPath();
+      const open = 7 + (tick % 4) * 4;
+      if (typeof ctx.ellipse === "function") {
+        ctx.ellipse(320, 196, 26, open, 0, 0, Math.PI * 2);
+      } else {
+        ctx.arc(320, 196, open, 0, Math.PI * 2);
+      }
+      ctx.fill();
+    } else {
+      ctx.strokeStyle = "#0f172a";
+      ctx.lineWidth = 7;
+      ctx.beginPath();
+      ctx.arc(320, 180, 38, 0.15 * Math.PI, 0.85 * Math.PI);
+      ctx.stroke();
+    }
+
+    // The scene tells the state at a glance.
+    if (mood === "thinking") {
+      for (let i = 0; i < 3; i++) {
+        const phase = (tick + i * 2) % 6;
+        ctx.fillStyle = "rgba(248,250,252," + (0.25 + (phase / 6) * 0.75) + ")";
+        ctx.beginPath();
+        ctx.arc(430 + i * 34, 92 - i * 20, 9 + i * 4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    } else if (mood === "reading") {
+      // An open book, its pages turning.
+      ctx.fillStyle = "#fef3c7";
+      ctx.fillRect(230, 258, 180, 76);
+      ctx.fillStyle = "#f59e0b";
+      ctx.fillRect(tick % 4 < 2 ? 232 : 320, 260, 88, 72);
+      ctx.strokeStyle = "#92400e";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(320, 258);
+      ctx.lineTo(320, 334);
+      ctx.stroke();
+    } else if (mood === "writing") {
+      // A laptop whose keys light in turn.
+      ctx.fillStyle = "#1e293b";
+      ctx.fillRect(238, 292, 164, 56);
+      ctx.fillStyle = "#0ea5e9";
+      ctx.fillRect(250, 268, 140, 24);
+      for (let i = 0; i < 6; i++) {
+        ctx.fillStyle = (tick + i) % 3 === 0 ? "#f8fafc" : "#64748b";
+        ctx.fillRect(252 + i * 22, 310, 14, 8);
+      }
+    } else if (mood === "listening") {
+      // Sound waves reaching the avatar.
+      for (let i = 1; i <= 3; i++) {
+        const phase = (tick + i * 2) % 6;
+        ctx.strokeStyle = "rgba(248,250,252," + (0.15 + (phase / 6) * 0.5) + ")";
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.arc(320, 150, 110 + i * 18, -0.5, 0.5);
+        ctx.stroke();
+      }
+    }
   };
 
   const frame = () => {
@@ -100,10 +177,36 @@ export function buildAvatarScript(): string {
     try { state.track.requestFrame(); } catch (err) { /* a stopped track cannot be asked for a frame */ }
   };
 
+  const stopAnimation = () => {
+    if (!state.timer) return;
+    clearInterval(state.timer);
+    state.timer = null;
+  };
+
+  const startAnimation = () => {
+    if (state.timer) return;
+    // Eight frames a second is enough for a face; the track publishes only the
+    // frames this loop asks for (captureStream(0)).
+    state.timer = setInterval(() => {
+      if (state.name !== "in-room") { stopAnimation(); return; }
+      state.tick += 1;
+      draw();
+      frame();
+    }, 125);
+  };
+
   const setState = (next) => {
     state.name = next === "in-room" || next === "failed" ? next : "joining";
+    if (state.name === "in-room") startAnimation(); else stopAnimation();
     draw();
     frame();
+  };
+
+  const setMood = (next) => {
+    state.mood = MOODS.indexOf(next) >= 0 ? next : "listening";
+    draw();
+    frame();
+    return state.mood;
   };
 
   const publish = () => {
@@ -469,6 +572,8 @@ export function buildAvatarScript(): string {
 
   window.${AVATAR_GLOBAL} = {
     setState: setState,
+    setMood: setMood,
+    mood: () => state.mood,
     state: () => state.name,
     liveness: () => ({
       publishing: state.live && !!state.track && state.track.readyState === "live",
@@ -499,6 +604,15 @@ export function buildAvatarScript(): string {
 }
 
 /** Set the face's state (joining, in-room or failed). */
+/** How long the avatar holds a mood, and how it is set. */
+export function setMoodExpression(mood: AvatarMood): string {
+  return `(() => {
+  const avatar = window.${AVATAR_GLOBAL};
+  if (!avatar || typeof avatar.setMood !== "function") return "listening";
+  try { return avatar.setMood(${JSON.stringify(mood)}); } catch (err) { return "listening"; }
+})()`;
+}
+
 export function setStateExpression(state: FaceState): string {
   return `(() => {
     const avatar = window.${AVATAR_GLOBAL};
