@@ -35,6 +35,8 @@ export class FakeMeeting implements MeetingPort {
   surviveLeave = false;
   private handler: ((event: MeetingStateEvent) => void) | undefined;
   private telemetryHandler: ((telemetry: MeetingTelemetry) => void) | undefined;
+  /** Retained after leave, so a test can prove a late report changes nothing. */
+  private lastHandler: ((event: MeetingStateEvent) => void) | undefined;
   private open = false;
 
   async available(): Promise<MeetingAvailability> {
@@ -55,6 +57,7 @@ export class FakeMeeting implements MeetingPort {
       link: input.link,
     });
     this.handler = input.onState;
+    this.lastHandler = input.onState;
     this.telemetryHandler = input.onTelemetry;
     this.open = true;
     if (this.skipAdmission) {
@@ -127,5 +130,13 @@ export class FakeMeeting implements MeetingPort {
     this.open = false;
     this.handler?.({ state: "failed", detail });
     this.handler = undefined;
+  }
+
+  /**
+   * Test helper: a state report from an adapter that should already be gone.
+   * The real adapter can race its own leave; the core must ignore it.
+   */
+  lateState(event: MeetingStateEvent): void {
+    this.lastHandler?.(event);
   }
 }
