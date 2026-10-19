@@ -110,6 +110,8 @@ interface Listening {
   input: StartListeningInput;
   chunks: Int16Array[];
   samples: number;
+  /** Samples above the floor: the part that could actually hold a word. */
+  speechSamples: number;
   silence: number;
   /** True once audio rose above the floor; only then is a window an utterance. */
   speaking: boolean;
@@ -141,6 +143,10 @@ export class BrowserVoice implements VoicePort {
   /** True while a clip is still being synthesised, before the page has it. */
   private pendingSpeech = false;
   private bargeInPending = false;
+  /** Consecutive loud milliseconds; a single spike is not an interruption. */
+  private loudMs = 0;
+  /** When the acknowledgement last played, so fragments cannot make it nag. */
+  private lastAckAt = Number.NEGATIVE_INFINITY;
   private dropped = 0;
   /** The missing-config reason is worth saying once, not once per sentence. */
   private missingReported = false;
@@ -164,6 +170,7 @@ export class BrowserVoice implements VoicePort {
       new WhisperTranscriber({
         command: options.config.whisperPath,
         modelPath: options.config.modelPath,
+        ...(options.config.vadPath ? { vadPath: options.config.vadPath } : {}),
         ...(options.config.language ? { language: options.config.language } : {}),
         logger: options.logger,
       });
@@ -196,11 +203,14 @@ export class BrowserVoice implements VoicePort {
     this.speechGeneration += 1;
     this.speaking = false;
     this.pendingSpeech = false;
+    this.loudMs = 0;
+    this.lastAckAt = Number.NEGATIVE_INFINITY;
     this.ack = undefined;
     this.listening = {
       input,
       chunks: [],
       samples: 0,
+      speechSamples: 0,
       silence: 0,
       speaking: false,
     };
@@ -239,16 +249,22 @@ export class BrowserVoice implements VoicePort {
     const level = samples.length > 0 ? rms(samples) : Math.max(0, frame.rms || 0);
     listening.input.onLevel?.(level);
 
-    // The operator's own voice outranks the avatar: any rise above the floor
-    // stops the clip playing and drops what is queued behind it. The page says
-    // whether it is really speaking, so a quiet room is not mistaken for a stop.
-    if (level >= this.config.rmsFloor) void this.bargeIn(listening.input);
+    // The operator's own voice outranks the avatar, but a single noise spike
+    // does not: only sustained speech stops the clip. The page says whether it
+    // is really speaking, so a quiet room is not mistaken for a stop.
+    if (level >= this.config.rmsFloor) {
+      this.loudMs += (samples.length * 1000) / SAMPLE_RATE;
+      if (this.loudMs >= this.config.bargeInMs) void this.bargeIn(listening.input);
+    } else {
+      this.loudMs = 0;
+    }
 
     if (samples.length === 0) return;
 
     if (level >= this.config.rmsFloor) {
       listening.speaking = true;
       listening.silence = 0;
+      listening.speechSamples += samples.length;
     } else if (!listening.speaking) {
       // Room tone before any speech is not an utterance: there is nothing to cut
       // and nothing to count, so a quiet room never inflates the drop counter.
@@ -278,13 +294,22 @@ export class BrowserVoice implements VoicePort {
   private cut(listening: Listening): void {
     const samples = concatInt16(listening.chunks);
     const speaking = listening.speaking;
+    const speechSamples = listening.speechSamples;
     listening.chunks = [];
     listening.samples = 0;
+    listening.speechSamples = 0;
     listening.silence = 0;
     listening.speaking = false;
     // Only a window that carried speech is an utterance; a silent stretch never
     // reaches here, and never becomes a dropped utterance.
     if (!speaking || samples.length === 0) return;
+    // A click, a door or a burst of room tone is not a question: less than a
+    // word of actual speech is dropped before any acknowledgement or model run.
+    const speechMs = (speechSamples * 1000) / SAMPLE_RATE;
+    if (speechMs < this.config.minUtteranceMs) {
+      this.logger.debug("voice: ignored a too-short window", { speechMs });
+      return;
+    }
     // The acknowledgement goes out before the slow local transcription, so the
     // room hears it inside the budget instead of waiting for the model.
     void this.acknowledge(listening.input);
@@ -319,6 +344,11 @@ export class BrowserVoice implements VoicePort {
 
   /** Say the acknowledgement the page already has in memory. */
   private acknowledge(input: StartListeningInput): Promise<void> {
+    // Fragments cut one after another must not turn the room into a chorus of
+    // "On it": the task still starts, but the acknowledgement is rate-limited.
+    const now = Date.now();
+    if (now - this.lastAckAt < this.config.ackCooldownMs) return Promise.resolve();
+    this.lastAckAt = now;
     return this.enqueueSpeech(input, async () => {
       // If the very first question lands while the clip is still being made,
       // wait for it rather than answering with silence.

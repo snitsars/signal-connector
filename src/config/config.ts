@@ -60,14 +60,26 @@ export const ConfigSchema = z.object({
       whisperPath: z.string().default(""),
       /** The multilingual model file the binary loads. */
       modelPath: z.string().default(""),
+      /**
+       * The optional Silero VAD model. When set, whisper drops non-speech
+       * segments before transcribing, which is the strongest guard against
+       * invented sentences over room tone.
+       */
+      vadPath: z.string().default(""),
       /** Spoken language; "auto" lets the model decide. */
       language: z.string().default("auto"),
       /** RMS below which audio counts as room tone, not speech (0..1). */
       rmsFloor: z.number().default(0.01),
+      /** A window shorter than this is noise, not an utterance to answer. */
+      minUtteranceMs: z.number().int().positive().default(300),
       /** Silence after speech that closes an utterance, in milliseconds. */
       silenceMs: z.number().int().default(900),
       /** The longest single utterance, so a stuck room cannot grow without end. */
       maxUtteranceMs: z.number().int().default(15_000),
+      /** At most one acknowledgement per this window, so fragments do not nag. */
+      ackCooldownMs: z.number().int().nonnegative().default(4_000),
+      /** Sustained operator speech before the answer is stopped, in milliseconds. */
+      bargeInMs: z.number().int().positive().default(400),
       /** The Windows system voice to speak with; empty picks the default. */
       voiceName: z.string().default(""),
       /** SAPI speaking rate, -10..10; 0 is the voice's own pace. */
@@ -78,10 +90,14 @@ export const ConfigSchema = z.object({
     .default({
       whisperPath: "",
       modelPath: "",
+      vadPath: "",
       language: "auto",
       rmsFloor: 0.01,
+      minUtteranceMs: 300,
       silenceMs: 900,
       maxUtteranceMs: 15_000,
+      ackCooldownMs: 4_000,
+      bargeInMs: 400,
       voiceName: "",
       rate: 0,
       maxSpeechChars: 600,

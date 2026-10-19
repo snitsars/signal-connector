@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfigSchema } from "../../config/config.js";
 import { nullLogger } from "../../logging/logger.js";
 import type { Utterance } from "../../core/ports.js";
@@ -217,6 +217,23 @@ describe("BrowserVoice", () => {
     expect(v.transcriber.calls).toHaveLength(0);
     expect(v.utterances).toHaveLength(0);
     expect(v.voice.drops).toBe(0);
+  });
+
+  it("ignores a window too short to hold a word", async () => {
+    const v = makeVoice();
+    dirs.push(v.workDir);
+    const handle = await v.start();
+    // 200 ms of sound then silence: a click, a door, not a question.
+    v.voice.push(speechFrame());
+    v.voice.push(speechFrame());
+    for (let i = 0; i < 9; i++) v.voice.push(silenceFrame());
+    await v.voice.whenIdle();
+
+    expect(v.transcriber.calls).toHaveLength(0);
+    expect(v.utterances).toHaveLength(0);
+    // Noise is not a failed transcription, so the drop counter stays still.
+    expect(v.voice.drops).toBe(0);
+    await handle.stop();
   });
 
   it("posts a failed run's reason and counts the drop", async () => {
@@ -475,7 +492,8 @@ describe("BrowserVoice speech", () => {
     v.synthesizer.hold();
     const pending = handle.speak("a long answer");
     await flush();
-    v.voice.push(speechFrame());
+    // One 100 ms spike is noise; sustained speech is an interruption.
+    for (let i = 0; i < 5; i++) v.voice.push(speechFrame());
     await flush();
 
     expect(v.sink.stops).toBe(1);
@@ -501,6 +519,55 @@ describe("BrowserVoice speech", () => {
 
     await handle.speak("the answer");
     expect(v.sink.played).toHaveLength(1);
+  });
+
+  it("does not stop on one noise spike but does on sustained speech", async () => {
+    const v = speaking();
+    dirs.push(v.workDir);
+    const handle = await v.start();
+    await v.voice.whenIdle();
+    v.sink.speaking = true;
+
+    // One 100 ms frame is a click; 400 ms is a person talking.
+    v.voice.push(speechFrame());
+    await flush();
+    expect(v.sink.stops).toBe(0);
+
+    for (let i = 0; i < 4; i++) v.voice.push(speechFrame());
+    await flush();
+    expect(v.sink.stops).toBe(1);
+    await handle.stop();
+  });
+
+  it("acknowledges at most once per cooldown window", async () => {
+    const v = speaking();
+    dirs.push(v.workDir);
+    const handle = await v.start();
+    await v.voice.whenIdle();
+
+    const base = 1_000_000;
+    const now = vi.spyOn(Date, "now").mockReturnValue(base);
+    try {
+      askSomething(v.voice);
+      await v.voice.whenIdle();
+      expect(v.sink.played).toHaveLength(1);
+
+      // A second fragment inside the cooldown runs as a task but stays silent.
+      now.mockReturnValue(base + 1_000);
+      askSomething(v.voice);
+      await v.voice.whenIdle();
+      expect(v.sink.played).toHaveLength(1);
+      expect(v.utterances).toHaveLength(2);
+
+      // After the window the acknowledgement is allowed again.
+      now.mockReturnValue(base + 5_000);
+      askSomething(v.voice);
+      await v.voice.whenIdle();
+      expect(v.sink.played).toHaveLength(2);
+    } finally {
+      now.mockRestore();
+    }
+    await handle.stop();
   });
 
   it("posts a failing voice once and keeps transcribing", async () => {
@@ -536,7 +603,7 @@ describe("BrowserVoice speech", () => {
     await flush();
     expect(v.sink.played).toHaveLength(0);
 
-    v.voice.push(speechFrame());
+    for (let i = 0; i < 5; i++) v.voice.push(speechFrame());
     await flush();
 
     // The pending clip counts as speech, so the operator silences it.

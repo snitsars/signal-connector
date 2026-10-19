@@ -5,6 +5,7 @@
  * rather than an exception, so the meeting keeps running.
  */
 import { spawn } from "node:child_process";
+import os from "node:os";
 import type { Logger } from "../../logging/logger.js";
 import { resolveCommand } from "../spawnCommand.js";
 
@@ -107,8 +108,18 @@ export interface WhisperOptions {
   command: string;
   /** The multilingual model file, e.g. `…\ggml-base.bin`. */
   modelPath: string;
+  /**
+   * The optional Silero VAD model. With it, whisper skips non-speech segments
+   * instead of inventing words over room tone.
+   */
+  vadPath?: string;
   /** Spoken language; "auto" lets the model decide. */
   language?: string;
+  /**
+   * CPU threads for the model. Defaults to the machine's logical cores, capped
+   * at eight: a bigger model on a laptop needs every core it can get.
+   */
+  threads?: number;
   /** How long one transcription may run before it is killed. */
   timeoutMs?: number;
   runner?: ProcessRunner;
@@ -119,11 +130,13 @@ export class WhisperTranscriber implements Transcriber {
   private readonly options: WhisperOptions;
   private readonly runner: ProcessRunner;
   private readonly timeoutMs: number;
+  private readonly threads: number;
 
   constructor(options: WhisperOptions) {
     this.options = options;
     this.runner = options.runner ?? spawnedRunner;
     this.timeoutMs = options.timeoutMs ?? 30_000;
+    this.threads = options.threads ?? Math.min(8, os.availableParallelism());
   }
 
   get configured(): boolean {
@@ -134,7 +147,7 @@ export class WhisperTranscriber implements Transcriber {
 
   /** The argv one run uses; exposed so a test can prove it. */
   argumentsFor(wavPath: string): string[] {
-    return [
+    const args = [
       "-m",
       this.options.modelPath,
       "-f",
@@ -143,7 +156,16 @@ export class WhisperTranscriber implements Transcriber {
       this.options.language?.trim() || "auto",
       "-nt", // no timestamps
       "-np", // no progress or system info, just the words
+      // Suppress the model's non-speech tokens ("[BLANK_AUDIO]", "(music)").
+      "-sns",
+      "-t",
+      String(this.threads),
     ];
+    // A VAD model is the strongest guard against transcription over room tone:
+    // whisper skips the segments Silero says are not speech.
+    const vad = this.options.vadPath?.trim();
+    if (vad) args.push("--vad", "-vm", vad);
+    return args;
   }
 
   async transcribe(wavPath: string): Promise<TranscribeResult> {

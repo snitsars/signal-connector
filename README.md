@@ -149,24 +149,32 @@ instead of being transcribed, so a small model cannot invent an instruction out 
 missing or failing transcriber is posted in the group with its reason, and the meeting keeps
 running.
 
-The tool and model are fetched, never installed from npm and never hosted:
+The tool and models are fetched, never installed from npm and never hosted:
 
 ```powershell
-pwsh scripts/install-whisper.ps1     # whisper.cpp + the multilingual base model
+pwsh scripts/install-whisper.ps1 -Model small   # whisper.cpp + small model + Silero VAD
 ```
 
-The generated `config.toml` already has a `[voice]` table, so put the two printed keys
+The generated `config.toml` already has a `[voice]` table, so put the three printed keys
 inside it (these are the defaults for the rest):
 
 ```toml
 # inside the existing [voice] table
 whisperPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\whisper-cli.exe'
-modelPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\models\ggml-base.bin'
-language = "auto"        # or "en", "fr", ...
+modelPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\models\ggml-small.bin'
+vadPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\models\ggml-silero-v6.2.0.bin'
+language = "uk"          # pin the language you speak; "auto" flips on short clips
 rmsFloor = 0.01          # audio below this RMS is room tone, not speech
+minUtteranceMs = 300     # a shorter window is a click, not a question
 silenceMs = 900          # silence that closes an utterance
 maxUtteranceMs = 15000   # the longest single utterance
+ackCooldownMs = 4000     # at most one "On it" per this window
+bargeInMs = 400          # sustained speech before the answer is stopped
 ```
+
+The VAD model is what keeps room tone from becoming a sentence: whisper skips the segments
+Silero says are not speech. Pinning `language` matters too — auto-detection on a two-second
+clip will happily switch between Ukrainian, Russian and English.
 
 Every utterance is one short 16 kHz WAV in the data dir, deleted immediately after the local
 run; no audio is retained beyond it. With both paths empty, a meeting still joins and shows
@@ -180,16 +188,18 @@ voice (SAPI, driven through PowerShell), so there is nothing to download and no 
 
 A spoken question gets a short acknowledgement the moment the utterance is cut — that clip is
 made once when listening starts, so a cold PowerShell start cannot blow the two-second budget —
-and the task's summary is spoken when the task finishes. A task started by **typing** in the
-group is never spoken.
+and the task's summary is spoken when the task finishes. The acknowledgement is rate-limited by
+`ackCooldownMs`, so a burst of fragments cannot turn the room into a chorus of "On it". A task
+started by **typing** in the group is never spoken.
 
 While a meeting is live, a permission waiting for an answer is announced aloud too; the decision
 is still typed in Signal (**approve**, **deny** or **always**), never spoken.
 
 Three rules keep it from being a nuisance: the operator's own voice stops the avatar
-mid-sentence and drops the clips still queued behind it; a failure of the voice is posted once
-in the group and the meeting keeps running; and a long answer is trimmed to `maxSpeechChars`
-before it is read — the full text always stays in the group message.
+mid-sentence after `bargeInMs` of sustained speech (a single click or noise spike does not) and
+drops the clips still queued behind it; a failure of the voice is posted once in the group and
+the meeting keeps running; and a long answer is trimmed to `maxSpeechChars` before it is read —
+the full text always stays in the group message.
 
 ```toml
 # inside the existing [voice] table

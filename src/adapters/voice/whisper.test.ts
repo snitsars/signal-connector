@@ -15,7 +15,7 @@ const outcome = (patch: Partial<RunOutcome> = {}): RunOutcome => ({
   ...patch,
 });
 
-function transcriber(run: ProcessRunner, language = "auto") {
+function transcriber(run: ProcessRunner, language = "auto", vadPath?: string) {
   const runs: TranscribeRun[] = [];
   const runner: ProcessRunner = async (input) => {
     runs.push(input);
@@ -25,7 +25,9 @@ function transcriber(run: ProcessRunner, language = "auto") {
     command: "whisper-cli.exe",
     modelPath: "C:\\whisper\\ggml-base.bin",
     language,
+    ...(vadPath ? { vadPath } : {}),
     timeoutMs: 12_345,
+    threads: 4,
     runner,
   });
   return { tool, runs };
@@ -73,6 +75,34 @@ describe("WhisperTranscriber", () => {
       "auto",
       "-nt",
       "-np",
+      "-sns",
+      "-t",
+      "4",
+    ]);
+  });
+
+  it("passes the VAD model so non-speech is skipped before transcription", async () => {
+    const { tool, runs } = transcriber(
+      async () => outcome({ stdout: "hello" }),
+      "uk",
+      "C:\\whisper\\ggml-silero-v6.2.0.bin",
+    );
+    await tool.transcribe("C:\\temp\\u.wav");
+    expect(runs[0]!.args).toEqual([
+      "-m",
+      "C:\\whisper\\ggml-base.bin",
+      "-f",
+      "C:\\temp\\u.wav",
+      "-l",
+      "uk",
+      "-nt",
+      "-np",
+      "-sns",
+      "-t",
+      "4",
+      "--vad",
+      "-vm",
+      "C:\\whisper\\ggml-silero-v6.2.0.bin",
     ]);
   });
 

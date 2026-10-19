@@ -1,14 +1,16 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Fetch whisper.cpp and a multilingual model into
+  Fetch whisper.cpp, a multilingual model and the Silero VAD model into
   %LOCALAPPDATA%\SignalConnector\whisper, verify the tool runs, and print the
-  two paths to paste into config.toml (voice.whisperPath, voice.modelPath).
+  three paths to paste into config.toml (voice.whisperPath, voice.modelPath,
+  voice.vadPath).
 
 .DESCRIPTION
-  Nothing is installed from npm and nothing is hosted: the release and the model
+  Nothing is installed from npm and nothing is hosted: the release and the models
   are plain downloads. Every step fails with a message naming what is missing,
-  and a partial download is removed rather than left behind.
+  and a partial download is removed rather than left behind. The VAD model lets
+  whisper skip non-speech before it invents a sentence over room tone.
 
 .PARAMETER Destination
   Where the tool and model live. Defaults to
@@ -32,6 +34,8 @@ $ModelFiles = @{
     small = 'ggml-small.bin'
 }
 $ModelFile = $ModelFiles[$Model]
+$VadFile = 'ggml-silero-v6.2.0.bin'
+$VadUri = "https://huggingface.co/ggml-org/whisper-vad/resolve/main/$VadFile"
 
 function Find-WhisperExe {
     param([string]$Root)
@@ -78,13 +82,27 @@ function Get-FileVerified {
 }
 
 function Write-VoiceConfig {
-    param([string]$Exe, [string]$ModelPath)
+    param([string]$Exe, [string]$ModelPath, [string]$VadPath)
     # config.toml is generated with a [voice] table already, and smol-toml
     # refuses a second one, so print keys only, never a header to paste.
-    Write-Host "Paste these two lines inside the existing [voice] table in %APPDATA%\SignalConnector\config.toml"
+    Write-Host "Paste these three lines inside the existing [voice] table in %APPDATA%\SignalConnector\config.toml"
     Write-Host "(do not add a second [voice] header — the file already has one):"
     Write-Output "whisperPath = '$Exe'"
     Write-Output "modelPath = '$ModelPath'"
+    Write-Output "vadPath = '$VadPath'"
+}
+
+function Get-VadModel {
+    param([string]$ModelDir)
+    New-Item -ItemType Directory -Force -Path $ModelDir | Out-Null
+    $path = Join-Path $ModelDir $VadFile
+    if (-not (Test-Path $path)) {
+        Get-FileVerified -Uri $VadUri -Path $path -What "the Silero VAD model ($VadFile)"
+    }
+    if (-not (Test-Path $path) -or (Get-Item $path).Length -eq 0) {
+        throw "The VAD model is missing or empty: $path"
+    }
+    return $path
 }
 
 if (-not $Destination) {
@@ -98,8 +116,9 @@ if (-not $Destination) {
 $existingExe = Find-WhisperExe -Root $Destination
 $existingModel = Join-Path (Join-Path $Destination 'models') $ModelFile
 if ($existingExe -and (Test-Path $existingModel) -and (Test-WhisperRuns -Exe $existingExe.FullName)) {
+    $existingVad = Get-VadModel -ModelDir (Join-Path $Destination 'models')
     Write-Host "whisper.cpp already installed: $($existingExe.FullName)" -ForegroundColor Green
-    Write-VoiceConfig -Exe $existingExe.FullName -ModelPath $existingModel
+    Write-VoiceConfig -Exe $existingExe.FullName -ModelPath $existingModel -VadPath $existingVad
     exit 0
 }
 
@@ -212,5 +231,8 @@ if (-not (Test-Path $modelPath) -or (Get-Item $modelPath).Length -eq 0) {
     throw "The model file is missing or empty: $modelPath"
 }
 
+# Silero VAD: a second, tiny model that lets whisper skip non-speech segments.
+$vadPath = Get-VadModel -ModelDir $modelDir
+
 Write-Host "Installed whisper.cpp $($release.tag_name) with the multilingual $Model model." -ForegroundColor Green
-Write-VoiceConfig -Exe $exe.FullName -ModelPath $modelPath
+Write-VoiceConfig -Exe $exe.FullName -ModelPath $modelPath -VadPath $vadPath
