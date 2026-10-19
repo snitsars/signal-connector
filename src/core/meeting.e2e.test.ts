@@ -525,7 +525,7 @@ describe("meeting end-to-end suite", () => {
     expect(
       harness.signal.sent.some((m) => m.text.includes("the answer in the group")),
     ).toBe(true);
-    expect(harness.voice.spoken).toHaveLength(0);
+    expect(harness.voice.spoken.filter((t) => !t.startsWith("Привіт"))).toHaveLength(0);
 
     // A permission announcement is silent too.
     harness.signal.emitMessage(harness.message("do work"));
@@ -546,7 +546,7 @@ describe("meeting end-to-end suite", () => {
     await settle();
 
     expect(harness.signal.sent.some((m) => m.text.includes("Approval needed"))).toBe(true);
-    expect(harness.voice.spoken).toHaveLength(0);
+    expect(harness.voice.spoken.filter((t) => !t.startsWith("Привіт"))).toHaveLength(0);
 
     // A count that drops does not re-enable speech or announce again.
     harness.meeting.telemetry({ presence: "someone", humans: 1, level: 0.3, audioEpoch: 1 });
@@ -562,7 +562,7 @@ describe("meeting end-to-end suite", () => {
     });
     await settle();
 
-    expect(harness.voice.spoken).toHaveLength(0);
+    expect(harness.voice.spoken.filter((t) => !t.startsWith("Привіт"))).toHaveLength(0);
     expect(harness.signal.sent.filter((m) => m.text.includes("listen-only"))).toHaveLength(1);
   });
 

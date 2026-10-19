@@ -72,6 +72,8 @@ export const ConfigSchema = z.object({
       piperVoicePath: z.string().default(""),
       /** Spoken language; "auto" lets the model decide. */
       language: z.string().default("auto"),
+    /** Said once when the avatar is in the room and listening. Empty says nothing. */
+    greeting: z.string().default("Привіт, я під'єднався. Готовий до роботи."),
       /** RMS below which audio counts as room tone, not speech (0..1). */
       rmsFloor: z.number().default(0.01),
       /** A window shorter than this is noise, not an utterance to answer. */

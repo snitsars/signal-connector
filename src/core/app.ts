@@ -1094,6 +1094,15 @@ export class CoreApp {
         },
       });
       this.logger.info("voice: listening to the room", { project: active.projectName });
+      // Say hello once the avatar is actually in the room and listening: the
+      // operator asked for a sign that the connection is live, not just a face
+      // on screen. Fire-and-forget, like every other clip.
+      const greeting = this.config.voice.greeting.trim();
+      if (greeting && active.voice) {
+        void active.voice.speak(greeting).catch((err: unknown) => {
+          this.logger.warn("voice: greeting failed", { error: String(err) });
+        });
+      }
     } catch (err: unknown) {
       this.logger.warn("voice: could not start listening", {
         project: active.projectName,

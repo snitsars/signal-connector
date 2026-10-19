@@ -37,6 +37,8 @@ opencodePath = "opencode"
 # piperPath = 'C:\Users\you\AppData\Local\SignalConnector\piper\piper\piper.exe'
 # piperVoicePath = 'C:\Users\you\AppData\Local\SignalConnector\piper\voices\uk_UA-oleksa-high.onnx'
 language = "auto"              # pin the language you speak; "auto" misfires on short clips
+# Said once when the avatar has joined and is listening. Set to "" to stay quiet.
+greeting = "Привіт, я під'єднався. Готовий до роботи."
 rmsFloor = 0.01                # audio below this RMS is room tone, not speech
 minUtteranceMs = 300           # a shorter window is a click, not a question
 silenceMs = 900                # silence after speech that closes an utterance

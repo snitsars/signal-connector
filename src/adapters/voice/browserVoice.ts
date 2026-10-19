@@ -165,6 +165,10 @@ export class BrowserVoice implements VoicePort {
             command: options.config.piperPath,
             voicePath: options.config.piperVoicePath,
             workDir: options.workDir,
+            // A 600-character answer is roughly a minute of speech, and Piper
+            // runs slower than real time; the old 20 s cap timed out on real
+            // answers and left the room in silence.
+            timeoutMs: 90_000,
           })
         : new SapiSynthesizer({
             workDir: options.workDir,

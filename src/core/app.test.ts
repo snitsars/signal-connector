@@ -1511,7 +1511,7 @@ describe("voice in the meeting", () => {
   let ctx: ReturnType<typeof makeApp>;
 
   /** A started app whose demo project is open and whose avatar is in the room. */
-  async function inRoom(): Promise<void> {
+  async function inRoom(options: { keepGreeting?: boolean } = {}): Promise<void> {
     meeting = new FakeMeeting();
     voice = new FakeVoice();
     ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable, undefined, voice);
@@ -1524,7 +1524,19 @@ describe("voice in the meeting", () => {
     meeting.admit();
     await tick();
     await tick();
+    // The join greeting is the baseline; the tests below measure what the
+    // avatar says afterwards.
+    if (!options.keepGreeting) voice.spoken.length = 0;
   }
+
+  /** Everything spoken except the join greeting, which starts every meeting. */
+  const said = (): string[] => voice.spoken.filter((text) => !text.startsWith("Привіт"));
+
+  it("greets the room once it is listening", async () => {
+    await inRoom({ keepGreeting: true });
+    expect(voice.spoken[0]).toContain("під'єднався");
+    await ctx.app.stop();
+  });
 
   it("starts listening when the avatar is in the room", async () => {
     await inRoom();
@@ -1637,7 +1649,7 @@ describe("voice in the meeting", () => {
     expect(ctx.agent.started.at(-1)?.prompt).toBe("yes");
     expect(ctx.signal.sent.some((m) => m.text.includes("heard: yes"))).toBe(true);
     expect(ctx.signal.sent.some((m) => m.text.includes("spoken word cannot"))).toBe(false);
-    expect(voice.spoken).toHaveLength(0);
+    expect(said()).toHaveLength(0);
     await ctx.app.stop();
   });
 
@@ -1791,7 +1803,7 @@ describe("voice in the meeting", () => {
     await tick();
 
     expect(ctx.signal.sent.some((m) => m.text.includes("Approval needed"))).toBe(true);
-    expect(voice.spoken).toHaveLength(0);
+    expect(said()).toHaveLength(0);
     await ctx.app.stop();
   });
 
@@ -1919,7 +1931,7 @@ describe("voice in the meeting", () => {
     await tick();
     await tick();
 
-    expect(voice.spoken).toHaveLength(0);
+    expect(said()).toHaveLength(0);
     await ctx.app.stop();
   });
 
@@ -1961,7 +1973,7 @@ describe("voice in the meeting", () => {
     ctx.signal.emitMessage(incoming("/meet stop"));
     await tick();
     await tick();
-    expect(voice.spoken).toHaveLength(0);
+    expect(said()).toHaveLength(0);
 
     // A second meeting in the same project's group is now the live one.
     ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
@@ -1985,7 +1997,7 @@ describe("voice in the meeting", () => {
     expect(ctx.signal.sent.some((m) => m.text.includes("an answer for the old room"))).toBe(
       true,
     );
-    expect(voice.spoken).toHaveLength(0);
+    expect(said()).toHaveLength(0);
     await ctx.app.stop();
   });
 
@@ -2029,6 +2041,9 @@ describe("meeting telemetry, presence and the watchdog", () => {
   let voice: FakeVoice;
   let clock: number;
   let ctx: ReturnType<typeof makeApp>;
+
+  /** Everything spoken except the join greeting, which starts every meeting. */
+  const said = (): string[] => voice.spoken.filter((text) => !text.startsWith("Привіт"));
 
   /** An admitted meeting on a clock the test moves by hand. */
   async function admitted(options: { watchdogMs?: number } = {}): Promise<void> {
@@ -2163,7 +2178,7 @@ describe("meeting telemetry, presence and the watchdog", () => {
     await tick();
     expect(ctx.signal.sent.some((m) => m.text.includes("heard: what happens now"))).toBe(true);
     expect(ctx.signal.sent.some((m) => m.text.includes("the answer in the group"))).toBe(true);
-    expect(voice.spoken).toHaveLength(0);
+    expect(said()).toHaveLength(0);
 
     // A permission announcement is silent too.
     ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
@@ -2178,7 +2193,7 @@ describe("meeting telemetry, presence and the watchdog", () => {
     await tick();
     await tick();
     expect(ctx.signal.sent.some((m) => m.text.includes("Approval needed"))).toBe(true);
-    expect(voice.spoken).toHaveLength(0);
+    expect(said()).toHaveLength(0);
 
     // A count that drops does not re-enable speech.
     meeting.telemetry({ presence: "someone", humans: 1, level: 0.3, audioEpoch: 1 });
@@ -2190,7 +2205,7 @@ describe("meeting telemetry, presence and the watchdog", () => {
     ctx.agent.emit({ type: "idle", taskId: thirdTask, at: Date.now(), summary: "still silent" });
     await tick();
     await tick();
-    expect(voice.spoken).toHaveLength(0);
+    expect(said()).toHaveLength(0);
     expect(ctx.signal.sent.filter((m) => m.text.includes("listen-only"))).toHaveLength(1);
     await ctx.app.stop();
   });
