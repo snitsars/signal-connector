@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { Task } from "../domain/types.js";
 import { DatabaseSync } from "./sqliteDriver.js";
 import { openStore } from "./store.js";
 
@@ -102,5 +103,69 @@ describe("meetings", () => {
         outcome: "interrupted by a restart",
       },
     ]);
+  });
+});
+
+function task(patch: Partial<Task> = {}): Task {
+  return {
+    id: "t1",
+    projectId: "demo",
+    sessionId: "s1",
+    prompt: "do it",
+    state: "done",
+    startedAt: 1000,
+    updatedAt: 2000,
+    ...patch,
+  };
+}
+
+describe("task voice flag", () => {
+  it("keeps a voice task recognisable after a restart", () => {
+    const { file, store } = fileStore();
+    store.createTask(task({ voice: true }));
+    store.close();
+
+    const reopened = openStore(file);
+    expect(reopened.getTask("t1")?.voice).toBe(true);
+    // A typed task has no flag: absent means "do not speak this one".
+    reopened.createTask(task({ id: "t2" }));
+    expect(reopened.getTask("t2")?.voice).toBeUndefined();
+    reopened.close();
+  });
+
+  it("adds the column to a database created before the flag existed", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "signalconnector-store-"));
+    dirs.push(dir);
+    const file = path.join(dir, "state.db");
+
+    // The tasks table as it looked before this story: no voice column.
+    const old = new DatabaseSync(file);
+    old.exec(`
+      CREATE TABLE tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        state TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        summary TEXT,
+        error TEXT
+      );
+      INSERT INTO tasks (id, project_id, session_id, prompt, state, started_at, updated_at)
+        VALUES ('old', 'demo', 's1', 'written before the change', 'done', 1, 2);
+    `);
+    old.close();
+
+    const store = openStore(file);
+    // The existing row survives the guarded ALTER and is not a voice task.
+    expect(store.getTask("old")?.prompt).toBe("written before the change");
+    expect(store.getTask("old")?.voice).toBeUndefined();
+
+    store.createTask(task({ id: "new", voice: true }));
+    expect(store.getTask("new")?.voice).toBe(true);
+    store.updateTask("new", { summary: "still spoken", updatedAt: 3000 });
+    expect(store.getTask("new")?.voice).toBe(true);
+    store.close();
   });
 });

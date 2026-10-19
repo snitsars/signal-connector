@@ -456,8 +456,17 @@ export class CoreApp {
     await this.runTask(project, prompt);
   }
 
-  /** Start a task in a specific project (used by /task and by option picks). */
-  private async runTask(project: Project, prompt: string): Promise<Task> {
+  /**
+   * Start a task in a specific project (used by /task, by option picks and by a
+   * spoken question). The origin is recorded with the row: only a task a spoken
+   * question started is spoken back when it finishes, and only into the meeting
+   * that heard it.
+   */
+  private async runTask(
+    project: Project,
+    prompt: string,
+    origin: "text" | { voice: true; meetingStartedAt: number } = "text",
+  ): Promise<Task> {
     const task: Task = {
       id: crypto.randomUUID(),
       projectId: project.id,
@@ -466,6 +475,7 @@ export class CoreApp {
       state: "started",
       startedAt: this.now(),
       updatedAt: this.now(),
+      ...(typeof origin === "object" ? { voice: true } : {}),
     };
     const sessionId = this.store.getSession(project.id);
     const started = await this.agent.startTask({
@@ -477,6 +487,11 @@ export class CoreApp {
     task.sessionId = started.sessionId;
     this.store.setSession(project.id, started.sessionId);
     this.store.createTask(task);
+    if (typeof origin === "object") {
+      // The meeting that heard the question, so a later meeting in the same
+      // project does not answer it. Kept in the store, like every other fact.
+      this.store.setValue(`voiceMeeting:${task.id}`, String(origin.meetingStartedAt));
+    }
 
     const { messageId } = await this.sendProject(project.id, statusLine(task, "queued"));
     this.store.setValue(`statusMsg:${task.id}`, messageId);
@@ -887,7 +902,7 @@ export class CoreApp {
     const own = this.store.getChannel(active.projectId);
     if (own) this.conversation = own.channelId;
     await this.sendProject(active.projectId, `${MARK.info} heard: ${text}`);
-    await this.runTask(project, text);
+    await this.runTask(project, text, { voice: true, meetingStartedAt: active.startedAt });
   }
 
   /** A failure the operator must hear: no transcriber, a failed run. */
@@ -896,16 +911,46 @@ export class CoreApp {
     await this.sendProject(active.projectId, `${MARK.attention} **Voice** · ${reason}`);
   }
 
-  /** Stop hearing the room; called on every terminal path. */
+  /** Stop hearing the room and stop talking into it; called on every terminal path. */
   private async stopListening(active: ActiveMeeting): Promise<void> {
     const handle = active.voice;
     active.voice = undefined;
     if (!handle) return;
     try {
+      // The room must not keep talking through a meeting that is ending; the
+      // adapter drops every clip still queued behind the one playing.
+      await handle.stopSpeaking();
+    } catch (err: unknown) {
+      this.logger.warn("voice: stopping speech failed", { error: String(err) });
+    }
+    try {
       await handle.stop();
     } catch (err: unknown) {
       this.logger.warn("voice: stopping failed", { error: String(err) });
     }
+  }
+
+  /**
+   * Say a voice task's outcome into the room. A task started by typing is never
+   * spoken, and the answer goes only to the meeting that heard the question —
+   * not a later one in the same project's group. The full text has already gone
+   * to the group, and speech is never awaited: it must not block `/meet stop`,
+   * approvals or the next agent event.
+   */
+  private speakOutcome(task: Task): void {
+    if (!task.voice) return;
+    const active = this.activeMeeting;
+    if (!active || active.finished || active.projectId !== task.projectId) return;
+    if (this.store.getValue(`voiceMeeting:${task.id}`) !== String(active.startedAt)) return;
+    const handle = active.voice;
+    if (!handle) return;
+    const text =
+      task.state === "failed"
+        ? `The task failed: ${task.error ?? "unknown error"}`
+        : task.summary ?? "The task is done.";
+    void handle.speak(text).catch((err: unknown) => {
+      this.logger.warn("voice: could not speak the answer", { error: String(err) });
+    });
   }
 
   private async editMeetingMessage(active: ActiveMeeting, markup: string): Promise<void> {
@@ -1048,6 +1093,9 @@ export class CoreApp {
       const done = this.store.getTask(task.id)!;
       await this.editStatus(done);
       await this.sendProject(done.projectId, summaryText(done));
+      // A spoken question is answered aloud once the work finishes; the group
+      // already has the full text, so this never holds up the event chain.
+      this.speakOutcome(done);
       if (event.diffPath) {
         await this.signal.attach(this.channelFor(task.projectId), event.diffPath, "📄 Working diff");
       }
@@ -1063,6 +1111,9 @@ export class CoreApp {
       const failed = this.store.getTask(task.id)!;
       await this.editStatus(failed);
       await this.sendProject(failed.projectId, summaryText(failed));
+      // A failure of a spoken task is spoken too, so the room is not left
+      // waiting for an answer that will not come.
+      this.speakOutcome(failed);
       return;
     }
 

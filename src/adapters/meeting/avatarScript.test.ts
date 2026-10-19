@@ -9,6 +9,9 @@ import {
   JOIN_CLICK_EXPRESSION,
   LIVENESS_EXPRESSION,
   setStateExpression,
+  SPEECH_STATE_EXPRESSION,
+  speakExpression,
+  STOP_SPEAKING_EXPRESSION,
   TAKE_PCM_EXPRESSION,
 } from "./avatarScript.js";
 
@@ -273,6 +276,26 @@ interface FakeSource {
   disconnect: () => void;
 }
 
+/** A decoded-clip source, just real enough for the playback path. */
+interface FakeBufferSource {
+  buffer: unknown;
+  connected: unknown;
+  started: number;
+  stopped: number;
+  onended: (() => void) | null;
+  connect: (destination: unknown) => void;
+  start: (when?: number) => void;
+  stop: () => void;
+  disconnect: () => void;
+}
+
+/** A decode a test can hold open, to prove a clip is dropped before it plays. */
+interface PendingDecode {
+  bytes: number;
+  resolve: (buffer: unknown) => void;
+  reject: (error: unknown) => void;
+}
+
 /** An audio track that a test can end, as a browser's remote track can. */
 function fakeAudioTrack() {
   const handlers: Record<string, (() => void)[]> = {};
@@ -289,14 +312,25 @@ function fakeAudioTrack() {
 
 /**
  * A page with a stub RTCPeerConnection and a fake Web Audio graph, so the
- * injected script's audio hook can be driven without a browser.
+ * injected script's audio hook and its playback path can be driven without a
+ * browser. `manualDecode` holds decodeAudioData open until a test resolves it.
  */
-function hearingPage() {
+function hearingPage(options: { manualDecode?: boolean; suspended?: boolean } = {}) {
   const processors: FakeProcessor[] = [];
   const sources: FakeSource[] = [];
+  const bufferSources: FakeBufferSource[] = [];
+  const destinations: unknown[] = [];
+  const decodes: PendingDecode[] = [];
+  const contexts: FakeAudioContext[] = [];
   class FakeAudioContext {
     sampleRate = 48_000;
-    destination = {};
+    destination = { kind: "speakers" };
+    state = "running";
+    resumed = 0;
+    constructor() {
+      contexts.push(this);
+      if (options.suspended) this.state = "suspended";
+    }
     createMediaStreamSource() {
       const source: FakeSource = {
         connected: 0,
@@ -320,7 +354,55 @@ function hearingPage() {
       return { gain: { value: 1 }, connect: () => undefined };
     }
     createMediaStreamDestination() {
-      return { stream: { getAudioTracks: () => [] } };
+      const destination = { stream: { getAudioTracks: () => [] } };
+      destinations.push(destination);
+      return destination;
+    }
+    resume() {
+      this.resumed += 1;
+      return Promise.resolve();
+    }
+    decodeAudioData(
+      bytes: ArrayBuffer,
+      success?: (buffer: unknown) => void,
+      failure?: (error: unknown) => void,
+    ): Promise<unknown> {
+      if (!options.manualDecode) return Promise.resolve({ frames: bytes.byteLength / 2 });
+      return new Promise((resolve, reject) => {
+        decodes.push({
+          bytes: bytes.byteLength,
+          resolve: (buffer) => {
+            resolve(buffer);
+            success?.(buffer);
+          },
+          reject: (error) => {
+            reject(error);
+            failure?.(error);
+          },
+        });
+      });
+    }
+    createBufferSource() {
+      const source: FakeBufferSource = {
+        buffer: null,
+        connected: undefined,
+        started: 0,
+        stopped: 0,
+        onended: null,
+        connect: (destination: unknown) => {
+          source.connected = destination;
+        },
+        start: () => {
+          source.started += 1;
+        },
+        stop: () => {
+          source.stopped += 1;
+          source.onended?.();
+        },
+        disconnect: () => undefined,
+      };
+      bufferSources.push(source);
+      return source;
     }
   }
   class FakePeerConnection {
@@ -349,8 +431,23 @@ function hearingPage() {
     document,
     navigator,
   );
-  return { window, processors, sources, FakePeerConnection };
+  return {
+    window,
+    processors,
+    sources,
+    bufferSources,
+    destinations,
+    decodes,
+    contexts,
+    FakePeerConnection,
+  };
 }
+
+/** Let the page's decode/play microtask chain settle. */
+const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/** One base64 clip, as the connector would send it. */
+const clip = (label = "RIFFfakeWAVE"): string => Buffer.from(label).toString("base64");
 
 describe("the room's audio hook", () => {
   it("copies a remote track, downsamples to 16 kHz and exposes a pump", () => {
@@ -456,5 +553,175 @@ describe("TAKE_PCM_EXPRESSION", () => {
       },
     };
     expect(run(window)).toEqual({ pcm: "", rms: 0, active: false });
+  });
+});
+
+interface FakeAvatar {
+  speak(base64: string): { queued: boolean; speaking: boolean };
+  stopSpeaking(): { speaking: boolean; queued: number };
+  speech(): { speaking: boolean; queued: number };
+}
+
+describe("speaking into the synthetic microphone", () => {
+  it("decodes a clip and plays it into the microphone's own destination", async () => {
+    const { window, bufferSources, destinations } = hearingPage();
+    const avatar = window[AVATAR_GLOBAL] as unknown as FakeAvatar;
+
+    expect(avatar.speech()).toEqual({ speaking: false, queued: 0 });
+    expect(avatar.speak(clip())).toEqual({ queued: true, speaking: true });
+    // Decoding is asynchronous: the clip starts on a later tick, not now.
+    expect(bufferSources).toHaveLength(0);
+    await flush();
+
+    expect(destinations).toHaveLength(1);
+    expect(bufferSources).toHaveLength(1);
+    expect(bufferSources[0]!.started).toBe(1);
+    expect(bufferSources[0]!.buffer).not.toBeNull();
+    // The very destination the silent track carries, so the room hears it.
+    expect(bufferSources[0]!.connected).toBe(destinations[0]);
+    expect(avatar.speech()).toEqual({ speaking: true, queued: 0 });
+  });
+
+  it("plays queued clips one after another, in order", async () => {
+    const { window, bufferSources } = hearingPage();
+    const avatar = window[AVATAR_GLOBAL] as unknown as FakeAvatar;
+
+    avatar.speak(clip("first"));
+    avatar.speak(clip("second"));
+    await flush();
+    expect(bufferSources).toHaveLength(1);
+    expect(avatar.speech()).toEqual({ speaking: true, queued: 1 });
+
+    // The first clip ends: the waiting one starts and the room is speaking again.
+    bufferSources[0]!.onended?.();
+    await flush();
+    expect(bufferSources).toHaveLength(2);
+    expect(bufferSources[1]!.started).toBe(1);
+    expect(avatar.speech()).toEqual({ speaking: true, queued: 0 });
+  });
+
+  it("stops the clip playing and drops everything queued behind it", async () => {
+    const { window, bufferSources } = hearingPage();
+    const avatar = window[AVATAR_GLOBAL] as unknown as FakeAvatar;
+
+    avatar.speak(clip("first"));
+    avatar.speak(clip("second"));
+    await flush();
+    expect(bufferSources).toHaveLength(1);
+
+    expect(avatar.stopSpeaking()).toEqual({ speaking: false, queued: 0 });
+    expect(bufferSources[0]!.stopped).toBe(1);
+    expect(avatar.speech()).toEqual({ speaking: false, queued: 0 });
+
+    // The stopped clip's own end must not revive the queue.
+    bufferSources[0]!.onended?.();
+    await flush();
+    expect(bufferSources).toHaveLength(1);
+    expect(bufferSources[0]!.started).toBe(1);
+  });
+
+  it("drops a clip that was still decoding when speech stopped", async () => {
+    const { window, bufferSources, decodes } = hearingPage({ manualDecode: true });
+    const avatar = window[AVATAR_GLOBAL] as unknown as FakeAvatar;
+
+    avatar.speak(clip());
+    expect(decodes).toHaveLength(1);
+    avatar.stopSpeaking();
+
+    decodes[0]!.resolve({ frames: 2 });
+    await flush();
+    // The clip never reached a source: the generation check refused it.
+    expect(bufferSources).toHaveLength(0);
+    expect(avatar.speech()).toEqual({ speaking: false, queued: 0 });
+  });
+
+  it("resumes a suspended context on the first clip", async () => {
+    const page = hearingPage({ suspended: true });
+    const avatar = page.window[AVATAR_GLOBAL] as unknown as FakeAvatar;
+    avatar.speak(clip());
+    await flush();
+    expect(page.contexts).toHaveLength(1);
+    expect(page.contexts[0]!.resumed).toBe(1);
+    expect(page.bufferSources).toHaveLength(1);
+  });
+});
+
+describe("speakExpression", () => {
+  const run = (window: unknown) =>
+    (new Function("window", `return ${speakExpression("AAA=")};`) as (w: unknown) => {
+      queued: boolean;
+      speaking: boolean;
+    })(window);
+
+  it("asks the page to play the clip it is given", () => {
+    const calls: string[] = [];
+    const window = {
+      [AVATAR_GLOBAL]: {
+        speak: (base64: string) => {
+          calls.push(base64);
+          return { queued: true, speaking: true };
+        },
+      },
+    };
+    expect(run(window)).toEqual({ queued: true, speaking: true });
+    expect(calls).toEqual(["AAA="]);
+  });
+
+  it("reports a page with no avatar as unable to speak", () => {
+    expect(run({})).toEqual({ queued: false, speaking: false });
+  });
+});
+
+describe("STOP_SPEAKING_EXPRESSION", () => {
+  const run = (window: unknown) =>
+    (new Function("window", `return ${STOP_SPEAKING_EXPRESSION};`) as (w: unknown) => {
+      speaking: boolean;
+      queued: number;
+    })(window);
+
+  it("stops the page's speech", () => {
+    let stops = 0;
+    const window = {
+      [AVATAR_GLOBAL]: {
+        stopSpeaking: () => {
+          stops += 1;
+          return { speaking: false, queued: 0 };
+        },
+      },
+    };
+    expect(run(window)).toEqual({ speaking: false, queued: 0 });
+    expect(stops).toBe(1);
+  });
+
+  it("reports silence when there is no avatar", () => {
+    expect(run({})).toEqual({ speaking: false, queued: 0 });
+  });
+});
+
+describe("SPEECH_STATE_EXPRESSION", () => {
+  const run = (window: unknown) =>
+    (new Function("window", `return ${SPEECH_STATE_EXPRESSION};`) as (w: unknown) => {
+      speaking: boolean;
+      queued: number;
+    })(window);
+
+  it("reports what the page is playing", () => {
+    expect(run({ [AVATAR_GLOBAL]: { speech: () => ({ speaking: true, queued: 2 }) } })).toEqual({
+      speaking: true,
+      queued: 2,
+    });
+  });
+
+  it("reports silence when there is no avatar or the page throws", () => {
+    expect(run({})).toEqual({ speaking: false, queued: 0 });
+    expect(
+      run({
+        [AVATAR_GLOBAL]: {
+          speech: () => {
+            throw new Error("gone");
+          },
+        },
+      }),
+    ).toEqual({ speaking: false, queued: 0 });
   });
 });

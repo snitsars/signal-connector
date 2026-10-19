@@ -1670,4 +1670,136 @@ describe("voice in the meeting", () => {
     expect(ended?.text).toContain("could not start the avatar browser");
     await ctx.app.stop();
   });
+
+  it("speaks the summary of a task a spoken question started", async () => {
+    await inRoom();
+
+    voice.utterance("what does the parser do");
+    await tick();
+    await tick();
+    const taskId = ctx.agent.started.at(-1)!.taskId;
+    // The row says it was a spoken question, so a restart still knows.
+    expect(ctx.store.getTask(taskId)?.voice).toBe(true);
+
+    ctx.agent.emit({
+      type: "idle",
+      taskId,
+      at: Date.now(),
+      summary: "the parser now handles quoted strings",
+    });
+    await tick();
+    await tick();
+
+    expect(voice.spoken.at(-1)).toContain("the parser now handles quoted strings");
+    // The full text stays in the group regardless of the cap.
+    const done = ctx.signal.sent.find((m) => m.text.includes("quoted strings"));
+    expect(done?.channelId).toBe("group-1-demo");
+    await ctx.app.stop();
+  });
+
+  it("never speaks the summary of a task started by typing in the group", async () => {
+    await inRoom();
+
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "a typed question"));
+    await tick();
+    const taskId = ctx.agent.started.at(-1)!.taskId;
+    expect(ctx.store.getTask(taskId)?.voice).toBeUndefined();
+
+    ctx.agent.emit({ type: "idle", taskId, at: Date.now(), summary: "done quietly" });
+    await tick();
+    await tick();
+
+    expect(voice.spoken).toHaveLength(0);
+    await ctx.app.stop();
+  });
+
+  it("speaks the failure of a voice task", async () => {
+    await inRoom();
+
+    voice.utterance("do the thing");
+    await tick();
+    await tick();
+    const taskId = ctx.agent.started.at(-1)!.taskId;
+
+    ctx.agent.emit({ type: "error", taskId, at: Date.now(), text: "the build broke" });
+    await tick();
+    await tick();
+
+    expect(voice.spoken.at(-1)).toContain("the build broke");
+    await ctx.app.stop();
+  });
+
+  it("stops speaking when the meeting ends", async () => {
+    await inRoom();
+    expect(voice.stoppedSpeaking).toBe(0);
+
+    ctx.signal.emitMessage(incoming("/meet stop"));
+    await tick();
+    await tick();
+
+    expect(voice.stoppedSpeaking).toBe(1);
+    await ctx.app.stop();
+  });
+
+  it("does not speak an earlier meeting's answer into a later meeting", async () => {
+    await inRoom();
+    voice.utterance("a question for the first meeting");
+    await tick();
+    await tick();
+    const taskId = ctx.agent.started.at(-1)!.taskId;
+
+    ctx.signal.emitMessage(incoming("/meet stop"));
+    await tick();
+    await tick();
+    expect(voice.spoken).toHaveLength(0);
+
+    // A second meeting in the same project's group is now the live one.
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    meeting.admit();
+    await tick();
+    await tick();
+    expect(voice.started).toHaveLength(2);
+
+    ctx.agent.emit({
+      type: "idle",
+      taskId,
+      at: Date.now(),
+      summary: "an answer for the old room",
+    });
+    await tick();
+    await tick();
+
+    // The answer stays in the group; it is not read into the new room.
+    expect(ctx.signal.sent.some((m) => m.text.includes("an answer for the old room"))).toBe(
+      true,
+    );
+    expect(voice.spoken).toHaveLength(0);
+    await ctx.app.stop();
+  });
+
+  it("does not let speech block the rest of the event chain", async () => {
+    await inRoom();
+    voice.utterance("a question whose answer will be slow");
+    await tick();
+    await tick();
+    const first = ctx.agent.started.at(-1)!.taskId;
+
+    voice.holdSpeech();
+    ctx.agent.emit({ type: "idle", taskId: first, at: Date.now(), summary: "held answer" });
+    await tick();
+
+    // The next task still runs and completes while the first clip is held.
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "a second question"));
+    await tick();
+    const second = ctx.agent.started.at(-1)!.taskId;
+    ctx.agent.emit({ type: "idle", taskId: second, at: Date.now(), summary: "second done" });
+    await tick();
+    await tick();
+
+    expect(ctx.store.getTask(second)?.state).toBe("done");
+    voice.releaseSpeech();
+    await ctx.app.stop();
+  });
 });

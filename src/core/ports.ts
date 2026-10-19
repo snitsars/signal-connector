@@ -167,9 +167,19 @@ export interface StartListeningInput {
   onFailure?: (reason: string) => void;
 }
 
-/** One handle that can stop listening for the meeting. */
+/** One handle that can stop listening for the meeting and speak into it. */
 export interface VoiceHandle {
+  /** Stop hearing the room; called on every terminal path. */
   stop(): Promise<void>;
+  /**
+   * Say this text into the room, through the same synthetic microphone. A long
+   * text is capped by the adapter; the full text belongs in the group. Speech
+   * queued behind an earlier clip waits its turn, and is dropped if the operator
+   * speaks first.
+   */
+  speak(text: string): Promise<void>;
+  /** Stop speaking at once and drop every clip still queued. */
+  stopSpeaking(): Promise<void>;
 }
 
 /**

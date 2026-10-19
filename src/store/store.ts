@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS tasks (
   started_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   summary TEXT,
-  error TEXT
+  error TEXT,
+  voice INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS approvals (
   project_id TEXT NOT NULL,
@@ -122,6 +123,7 @@ function rowToTask(row: Record<string, unknown>): Task {
   };
   if (row.summary != null) task.summary = String(row.summary);
   if (row.error != null) task.error = String(row.error);
+  if (Number(row.voice) === 1) task.voice = true;
   return task;
 }
 
@@ -138,6 +140,13 @@ export function openStore(path: string): Store {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(SCHEMA);
+  // A database created before the voice flag existed keeps its tasks; the
+  // column is added in place rather than by dropping the table (one database
+  // rule). SQLite has no `ADD COLUMN IF NOT EXISTS`, so ask first.
+  const columns = db.prepare(`PRAGMA table_info(tasks)`).all();
+  if (!columns.some((column) => String(column.name) === "voice")) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN voice INTEGER NOT NULL DEFAULT 0`);
+  }
 
   return {
     upsertProject(project) {
@@ -188,8 +197,8 @@ export function openStore(path: string): Store {
 
     createTask(task) {
       db.prepare(
-        `INSERT INTO tasks (id, project_id, session_id, prompt, state, started_at, updated_at, summary, error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO tasks (id, project_id, session_id, prompt, state, started_at, updated_at, summary, error, voice)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).run(
         task.id,
         task.projectId,
@@ -200,6 +209,7 @@ export function openStore(path: string): Store {
         task.updatedAt,
         task.summary ?? null,
         task.error ?? null,
+        task.voice ? 1 : 0,
       );
     },
     updateTask(id, patch) {

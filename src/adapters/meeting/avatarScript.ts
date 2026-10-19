@@ -33,7 +33,16 @@ export function buildAvatarScript(): string {
   if (window.${AVATAR_GLOBAL}) return;
 
   const COLOURS = ${JSON.stringify(FACE_COLOURS)};
-  const state = { name: "joining", track: null, live: false, canvas: null, ctx: null, audio: null };
+  const state = {
+    name: "joining",
+    track: null,
+    live: false,
+    canvas: null,
+    ctx: null,
+    audio: null,
+    audioContext: null,
+    audioDestination: null,
+  };
 
   const ensureCanvas = () => {
     if (state.canvas) return state.canvas;
@@ -116,19 +125,138 @@ export function buildAvatarScript(): string {
   // construct: the face for video, and a silent Web Audio destination for audio.
   // The machine's own camera and microphone are never opened — a room that asks
   // for audio must not be able to listen to whatever is in this room.
-  const silentStream = () => {
-    if (state.audio) return state.audio;
+  //
+  // The context and destination are kept: that same destination is what the
+  // avatar later plays into, so the room hears a spoken clip through the
+  // microphone stream it already receives.
+  const ensureSpeaker = () => {
+    if (state.audio && state.audioContext && state.audioDestination) {
+      return { ctx: state.audioContext, destination: state.audioDestination };
+    }
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       if (!Ctx) return null;
       const ctx = new Ctx();
       const destination = ctx.createMediaStreamDestination();
+      state.audioContext = ctx;
+      state.audioDestination = destination;
       state.audio = destination.stream;
     } catch (err) {
       state.audio = null;
+      state.audioContext = null;
+      state.audioDestination = null;
     }
-    return state.audio;
+    return state.audio ? { ctx: state.audioContext, destination: state.audioDestination } : null;
   };
+
+  const silentStream = () => {
+    const graph = ensureSpeaker();
+    return graph ? state.audio : null;
+  };
+
+  // --- talking back ----------------------------------------------------------
+  // The room hears only what the synthetic microphone publishes, so a clip is
+  // decoded in this page and played into the destination above. One clip at a
+  // time, in order; stopSpeaking() drops the queue and silences the one playing.
+  const speech = { queue: [], current: null, playing: false, generation: 0 };
+
+  const decodeClip = (base64) => {
+    return new Promise((resolve, reject) => {
+      const graph = ensureSpeaker();
+      if (!graph || typeof graph.ctx.decodeAudioData !== "function") {
+        reject(new Error("no audio context to decode with"));
+        return;
+      }
+      try {
+        const binary = atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        // Chrome resolves the promise; the callback form is kept for a page
+        // whose decodeAudioData only takes success/error handlers.
+        const decoded = graph.ctx.decodeAudioData(bytes.buffer, resolve, reject);
+        if (decoded && typeof decoded.then === "function") decoded.then(resolve, reject);
+      } catch (err) {
+        reject(err);
+      }
+    });
+  };
+
+  const pumpSpeech = () => {
+    if (speech.playing) return;
+    const next = speech.queue.shift();
+    if (!next) return;
+    // A clip queued before a barge-in is dropped rather than played late.
+    if (next.generation !== speech.generation) return pumpSpeech();
+    speech.playing = true;
+    decodeClip(next.base64).then(
+      (buffer) => {
+        if (next.generation !== speech.generation) {
+          speech.playing = false;
+          return pumpSpeech();
+        }
+        const graph = ensureSpeaker();
+        if (!graph || typeof graph.ctx.createBufferSource !== "function") {
+          speech.playing = false;
+          return;
+        }
+        const source = graph.ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(graph.destination);
+        source.onended = () => {
+          if (speech.current !== source) return;
+          speech.current = null;
+          speech.playing = false;
+          pumpSpeech();
+        };
+        speech.current = source;
+        try {
+          source.start(0);
+        } catch (err) {
+          speech.current = null;
+          speech.playing = false;
+          pumpSpeech();
+        }
+      },
+      () => {
+        speech.current = null;
+        speech.playing = false;
+        pumpSpeech();
+      },
+    );
+  };
+
+  const speak = (base64) => {
+    if (!base64) return { queued: false, speaking: speech.playing };
+    const graph = ensureSpeaker();
+    if (!graph) return { queued: false, speaking: false };
+    // A context suspended by the autoplay policy is resumed on the first clip
+    // instead of failing silently. The browser is started with
+    // --autoplay-policy=no-user-gesture-required, so this is a safety net.
+    if (typeof graph.ctx.resume === "function" && graph.ctx.state === "suspended") {
+      try { graph.ctx.resume(); } catch (err) { /* the clip may still play */ }
+    }
+    speech.queue.push({ base64: base64, generation: speech.generation });
+    pumpSpeech();
+    return { queued: true, speaking: true };
+  };
+
+  const stopSpeaking = () => {
+    // Bumping the generation invalidates a clip still decoding, and every clip
+    // still queued behind it.
+    speech.generation += 1;
+    speech.queue.length = 0;
+    const current = speech.current;
+    speech.current = null;
+    speech.playing = false;
+    if (current) {
+      try { current.onended = null; } catch (err) { /* assigning is best effort */ }
+      try { current.stop(); } catch (err) { /* already finished */ }
+      try { current.disconnect(); } catch (err) { /* already detached */ }
+    }
+    return { speaking: false, queued: 0 };
+  };
+
+  const speechState = () => ({ speaking: speech.playing, queued: speech.queue.length });
 
   // --- hearing the room ------------------------------------------------------
   // The room plays the operator's voice through a peer connection. That audio
@@ -291,6 +419,9 @@ export function buildAvatarScript(): string {
     }),
     takePcm: takePcm,
     hearing: () => ({ active: hearing.active, level: hearing.level }),
+    speak: speak,
+    stopSpeaking: stopSpeaking,
+    speech: speechState,
   };
 
   hookPeerConnection();
@@ -329,6 +460,43 @@ export const TAKE_PCM_EXPRESSION = `(() => {
   const avatar = window.${AVATAR_GLOBAL};
   if (!avatar || typeof avatar.takePcm !== "function") return { pcm: "", rms: 0, active: false };
   try { return avatar.takePcm(); } catch (err) { return { pcm: "", rms: 0, active: false }; }
+})()`;
+
+/**
+ * Play one base64 WAV through the page's synthetic microphone: the room hears
+ * it through the microphone stream it already receives. Reports whether the
+ * clip was queued; a clip queued behind another waits its turn.
+ */
+export function speakExpression(wavBase64: string): string {
+  return `(() => {
+    const avatar = window.${AVATAR_GLOBAL};
+    if (!avatar || typeof avatar.speak !== "function") return { queued: false, speaking: false };
+    try { return avatar.speak(${JSON.stringify(wavBase64)}); }
+    catch (err) { return { queued: false, speaking: false }; }
+  })()`;
+}
+
+/** Stop the clip playing and drop every clip queued behind it. */
+export const STOP_SPEAKING_EXPRESSION = `(() => {
+  const avatar = window.${AVATAR_GLOBAL};
+  if (!avatar || typeof avatar.stopSpeaking !== "function") return { speaking: false, queued: 0 };
+  try { return avatar.stopSpeaking(); }
+  catch (err) { return { speaking: false, queued: 0 }; }
+})()`;
+
+/**
+ * Whether the page is still playing a clip and how many wait behind it. Used
+ * to tell a real barge-in from room tone before stopping speech.
+ */
+export const SPEECH_STATE_EXPRESSION = `(() => {
+  const avatar = window.${AVATAR_GLOBAL};
+  if (!avatar || typeof avatar.speech !== "function") return { speaking: false, queued: 0 };
+  try {
+    const now = avatar.speech();
+    return { speaking: !!now.speaking, queued: Number(now.queued) || 0 };
+  } catch (err) {
+    return { speaking: false, queued: 0 };
+  }
 })()`;
 
 /**

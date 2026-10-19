@@ -111,11 +111,35 @@ async function main(): Promise<void> {
   // Secrets are resolved lazily by adapters that need them; keep the store ready.
   void secrets;
 
-  const voice = new BrowserVoice({
+  // The one temp audio directory: an utterance WAV and a spoken clip, each
+  // deleted the moment its consumer has it.
+  const voiceDir = path.join(dir, "voice");
+
+  // The meeting page is the only thing that can make the room hear, and the
+  // voice pump is the only thing that decides what to say, so the two are wired
+  // to each other: audio out of the room goes to the pump, spoken clips go back
+  // through the same page.
+  let voice: BrowserVoice | undefined;
+  const meeting = new BrowserMeeting({
+    // The browser's only footprint: its own profile under the data dir, never
+    // the operator's, and safe to delete at any time.
+    profileDir: path.join(dir, "meeting-profile"),
+    logger,
+    // The room's audio rides the CDP channel the meeting already owns.
+    onAudio: (frame) => voice?.push(frame),
+  });
+  voice = new BrowserVoice({
     config: config.voice,
     logger,
-    // The only audio ever written: one temp WAV per utterance, deleted at once.
-    workDir: path.join(dir, "voice"),
+    workDir: voiceDir,
+    // Speech goes back into the room's own synthetic microphone, over the CDP
+    // session the meeting already has open.
+    sink: {
+      play: (wavBase64, epoch) => meeting.playAudio(wavBase64, epoch),
+      stop: () => meeting.stopAudio(),
+      state: () => meeting.speechState(),
+      epoch: () => meeting.speechEpoch(),
+    },
   });
 
   const app = new CoreApp({
@@ -125,14 +149,7 @@ async function main(): Promise<void> {
     config,
     logger,
     launcher: new ProjectLaunchers(config, logger),
-    meeting: new BrowserMeeting({
-      // The browser's only footprint: its own profile under the data dir, never
-      // the operator's, and safe to delete at any time.
-      profileDir: path.join(dir, "meeting-profile"),
-      logger,
-      // The room's audio rides the CDP channel the meeting already owns.
-      onAudio: (frame) => voice.push(frame),
-    }),
+    meeting,
     voice,
   });
   await app.start();
@@ -151,8 +168,12 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     logger.info("shutting down");
-    await app.stop();
-    await voice.stop();
+    try {
+      await app.stop();
+    } finally {
+      // Even if leaving the room threw, no clip may outlive the process.
+      await voice?.stop();
+    }
     await daemon?.stop();
     bridge.close();
     store.close();

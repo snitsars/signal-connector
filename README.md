@@ -171,6 +171,31 @@ Every utterance is one short 16 kHz WAV in the data dir, deleted immediately aft
 run; no audio is retained beyond it. With both paths empty, a meeting still joins and shows
 the face — it is simply deaf, and says so when someone speaks.
 
+### Talking back
+
+The avatar also answers out loud, through the same synthetic microphone the room already
+receives — no new stream, socket or protocol. Speech is made **locally** by the Windows system
+voice (SAPI, driven through PowerShell), so there is nothing to download and no hosted API.
+
+A spoken question gets a short acknowledgement the moment the utterance is cut — that clip is
+made once when listening starts, so a cold PowerShell start cannot blow the two-second budget —
+and the task's summary is spoken when the task finishes. A task started by **typing** in the
+group is never spoken.
+
+Three rules keep it from being a nuisance: the operator's own voice stops the avatar
+mid-sentence and drops the clips still queued behind it; a failure of the voice is posted once
+in the group and the meeting keeps running; and a long answer is trimmed to `maxSpeechChars`
+before it is read — the full text always stays in the group message.
+
+```toml
+# inside the existing [voice] table
+voiceName = ""           # a Windows system voice; "" picks the default
+rate = 0                 # speaking rate, -10..10
+maxSpeechChars = 600     # longest answer read aloud; the group keeps all of it
+```
+
+Each spoken clip is one temp WAV in the data dir, deleted as soon as the page has it.
+
 ### Message colours
 
 Signal has no coloured text, so state is carried by circles. The language:

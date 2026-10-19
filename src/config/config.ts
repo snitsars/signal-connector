@@ -50,8 +50,9 @@ export const ConfigSchema = z.object({
     })
     .default({ host: "127.0.0.1", port: 8790 }),
   /**
-   * Hearing the room (spine AD-1: core sees text and levels only). The tool and
-   * model are fetched by `scripts/install-whisper.ps1`; nothing is spoken.
+   * Hearing the room and talking back (spine AD-1: core sees text and levels
+   * only). The transcriber is fetched by `scripts/install-whisper.ps1`; speech
+   * uses the Windows system voice, so nothing is downloaded or hosted.
    */
   voice: z
     .object({
@@ -67,6 +68,12 @@ export const ConfigSchema = z.object({
       silenceMs: z.number().int().default(900),
       /** The longest single utterance, so a stuck room cannot grow without end. */
       maxUtteranceMs: z.number().int().default(15_000),
+      /** The Windows system voice to speak with; empty picks the default. */
+      voiceName: z.string().default(""),
+      /** SAPI speaking rate, -10..10; 0 is the voice's own pace. */
+      rate: z.number().int().min(-10).max(10).default(0),
+      /** The longest answer read aloud; the full text stays in the group. */
+      maxSpeechChars: z.number().int().positive().default(600),
     })
     .default({
       whisperPath: "",
@@ -75,6 +82,9 @@ export const ConfigSchema = z.object({
       rmsFloor: 0.01,
       silenceMs: 900,
       maxUtteranceMs: 15_000,
+      voiceName: "",
+      rate: 0,
+      maxSpeechChars: 600,
     }),
   projects: z
     .array(

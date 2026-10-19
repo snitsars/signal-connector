@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { admissionStep, browserArguments } from "./browserMeeting.js";
+import { nullLogger } from "../../logging/logger.js";
+import { admissionStep, BrowserMeeting, browserArguments } from "./browserMeeting.js";
 
 describe("browserArguments", () => {
   it("starts on about:blank so the media override exists before the room", () => {
@@ -50,5 +51,15 @@ describe("admissionStep", () => {
       kind: "failed",
       detail: "nobody admitted the avatar within 90 s",
     });
+  });
+});
+
+describe("speaking without a meeting", () => {
+  it("reports silence and refuses a clip when no room is open", async () => {
+    const meeting = new BrowserMeeting({ profileDir: ".", logger: nullLogger() });
+    expect(await meeting.playAudio("AAA=")).toBe(false);
+    expect(await meeting.speechState()).toEqual({ speaking: false, queued: 0 });
+    // Stopping silence is a no-op, not an error.
+    await meeting.stopAudio();
   });
 });

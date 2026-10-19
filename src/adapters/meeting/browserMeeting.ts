@@ -30,6 +30,9 @@ import {
   JOIN_CLICK_EXPRESSION,
   LIVENESS_EXPRESSION,
   setStateExpression,
+  SPEECH_STATE_EXPRESSION,
+  speakExpression,
+  STOP_SPEAKING_EXPRESSION,
   TAKE_PCM_EXPRESSION,
 } from "./avatarScript.js";
 import { attachToPage, CdpClient, waitForDevToolsPort, type AttachedPage } from "./cdp.js";
@@ -102,6 +105,8 @@ export interface BrowserMeetingOptions {
   onAudio?: (frame: RoomAudioFrame) => void;
   /** How often to drain the page's audio pump while in the room. */
   audioPollMs?: number;
+  /** How long a wedged page gets to go quiet before the browser is closed. */
+  stopTimeoutMs?: number;
 }
 
 /** Read one drained audio frame, tolerating a page that answered with nothing. */
@@ -143,6 +148,12 @@ interface Liveness {
   state?: string;
 }
 
+/** What the page says about the speech it is playing. */
+export interface SpeechState {
+  speaking: boolean;
+  queued: number;
+}
+
 /** Force-kill a process and its children; the browser must not outlive the meeting. */
 export function killTree(pid: number, platform: NodeJS.Platform = process.platform): void {
   if (platform === "win32") {
@@ -170,7 +181,10 @@ export class BrowserMeeting implements MeetingPort {
   private readonly pollMs: number;
   private readonly leaveTimeoutMs: number;
   private readonly audioPollMs: number;
+  private readonly stopTimeoutMs: number;
   private session: Session | undefined;
+  /** Bumped on every page navigation: a clip made for the old document is stale. */
+  private pageEpoch = 0;
 
   constructor(options: BrowserMeetingOptions) {
     this.options = options;
@@ -179,6 +193,7 @@ export class BrowserMeeting implements MeetingPort {
     this.pollMs = options.pollMs ?? 1_000;
     this.leaveTimeoutMs = options.leaveTimeoutMs ?? 5_000;
     this.audioPollMs = options.audioPollMs ?? 250;
+    this.stopTimeoutMs = options.stopTimeoutMs ?? 1_000;
   }
 
   async available(): Promise<MeetingAvailability> {
@@ -253,11 +268,12 @@ export class BrowserMeeting implements MeetingPort {
         void this.onPageLost(session);
       });
       // A navigation loads a new document with the injected script; repaint the
-      // face so the room never shows a stale colour after a reload.
+      // face so the room never shows a stale colour after a reload, and make the
+      // fresh document start silent.
       page.client.on("Page.frameNavigated", (params) => {
         const frame = params.frame as { parentId?: string } | undefined;
         if (frame?.parentId) return;
-        void this.paint(session, session.inRoom ? "in-room" : "joining");
+        void this.onNavigated(session);
       });
 
       const avatar = buildAvatarScript();
@@ -438,7 +454,7 @@ export class BrowserMeeting implements MeetingPort {
       clearInterval(session.timer);
       session.timer = undefined;
     }
-    this.stopAudio(session);
+    this.stopAudioPump(session);
     this.session = undefined;
     if (session.leaving) return;
     session.leaving = true;
@@ -490,10 +506,88 @@ export class BrowserMeeting implements MeetingPort {
     }
   }
 
-  private stopAudio(session: Session): void {
+  private stopAudioPump(session: Session): void {
     if (!session.audioTimer) return;
     clearInterval(session.audioTimer);
     session.audioTimer = undefined;
+  }
+
+  // --- speaking into the room ------------------------------------------------
+
+  /**
+   * Queue one base64 WAV for the room to hear. The page decodes it and plays it
+   * into the synthetic microphone it already publishes, so no new stream or
+   * transport is opened. False when there is no room to speak into: no page,
+   * a meeting that is ending, or a room the avatar has not been admitted to.
+   */
+  async playAudio(wavBase64: string, epoch?: number): Promise<boolean> {
+    const session = this.session;
+    const page = session?.page;
+    if (!session || !page || session.leaving || !session.inRoom) return false;
+    // The clip was readied for an earlier document: it must not play here.
+    if (epoch !== undefined && epoch !== this.pageEpoch) return false;
+    try {
+      // The avatar script is injected into every new document; until it is
+      // there, the fresh page has no microphone to play into.
+      const liveness = await page.evaluate<Liveness>(LIVENESS_EXPRESSION);
+      if (!liveness?.present) return false;
+      const result = await page.evaluate<{ queued?: boolean }>(speakExpression(wavBase64));
+      return !!result?.queued;
+    } catch {
+      // A navigating page has no execution context; the clip is simply not heard.
+      return false;
+    }
+  }
+
+  /**
+   * The page's document generation. It changes on every reload, so a clip
+   * readied for an earlier document is never played into the new one.
+   */
+  speechEpoch(): number {
+    return this.pageEpoch;
+  }
+
+  /** Stop the clip playing now and drop every clip queued behind it. */
+  async stopAudio(): Promise<void> {
+    const session = this.session;
+    if (!session) return;
+    await this.sendStop(session);
+  }
+
+  /** Whether the page is still playing a clip, and how many wait behind it. */
+  async speechState(): Promise<SpeechState> {
+    const session = this.session;
+    const page = session?.page;
+    if (!session || !page) return { speaking: false, queued: 0 };
+    try {
+      const state = await page.evaluate<SpeechState>(SPEECH_STATE_EXPRESSION);
+      return { speaking: !!state?.speaking, queued: Number(state?.queued) || 0 };
+    } catch {
+      return { speaking: false, queued: 0 };
+    }
+  }
+
+  /** Best-effort silence in the page; a page that is gone is already silent. */
+  private async sendStop(session: Session): Promise<void> {
+    const page = session.page;
+    if (!page) return;
+    try {
+      // Bounded: a wedged page must not hold up the close and force-kill.
+      await page.evaluate(STOP_SPEAKING_EXPRESSION, this.stopTimeoutMs);
+    } catch {
+      // A navigating or wedged document has no context left to quiet.
+    }
+  }
+
+  /**
+   * A reload starts a fresh document: the old clips went with it, the new one
+   * starts silent, and its generation makes any clip still being prepared stale.
+   */
+  private async onNavigated(session: Session): Promise<void> {
+    if (this.session !== session) return;
+    this.pageEpoch += 1;
+    await this.sendStop(session);
+    await this.paint(session, session.inRoom ? "in-room" : "joining");
   }
 
   private async paint(session: Session, state: "joining" | "in-room" | "failed"): Promise<void> {
@@ -521,7 +615,10 @@ export class BrowserMeeting implements MeetingPort {
       clearInterval(session.timer);
       session.timer = undefined;
     }
-    this.stopAudio(session);
+    this.stopAudioPump(session);
+
+    // The room must not keep talking through a meeting that is ending.
+    await this.sendStop(session);
 
     if (askBrowser && session.client) {
       try {

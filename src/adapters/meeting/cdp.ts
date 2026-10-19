@@ -211,11 +211,35 @@ export interface AttachedPage {
   client: CdpClient;
   targetId: string;
   sessionId: string;
-  evaluate<T>(expression: string): Promise<T>;
+  /**
+   * Evaluate an expression in the page. `timeoutMs` bounds the wait: a page
+   * wedged by its own script never answers, and its caller must still be able
+   * to close the browser.
+   */
+  evaluate<T>(expression: string, timeoutMs?: number): Promise<T>;
   /** Load a URL in this page (the room is opened only after injection). */
   navigate(url: string): Promise<void>;
   /** Fires when this page target goes away (crash, close, navigation to a new target). */
   onDetached(handler: () => void): () => void;
+}
+
+/** Reject a protocol call that a wedged page never answers. */
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("the page did not answer in time"));
+    }, timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        clearTimeout(timer);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      },
+    );
+  });
 }
 
 /** Attach to the browser's first page target and enable page/runtime domains. */
@@ -242,12 +266,14 @@ export async function attachToPage(client: CdpClient): Promise<AttachedPage> {
     client,
     targetId: page.targetId,
     sessionId,
-    async evaluate<T>(expression: string): Promise<T> {
-      const result = await client.send<{ result?: { value?: unknown }; exceptionDetails?: unknown }>(
+    async evaluate<T>(expression: string, timeoutMs?: number): Promise<T> {
+      const call = client.send<{ result?: { value?: unknown }; exceptionDetails?: unknown }>(
         "Runtime.evaluate",
         { expression, returnByValue: true, awaitPromise: false },
         sessionId,
       );
+      const result =
+        timeoutMs === undefined ? await call : await withTimeout(call, timeoutMs);
       if (result.exceptionDetails) throw new Error("the page could not run the avatar script");
       return result.result?.value as T;
     },

@@ -23,6 +23,11 @@ export interface Task {
   updatedAt: number;
   summary?: string;
   error?: string;
+  /**
+   * True when a spoken question started this task, so its completion is spoken
+   * back into the room. Stored with the row: a restart must not lose it.
+   */
+  voice?: boolean;
 }
 
 export type AgentEventType =

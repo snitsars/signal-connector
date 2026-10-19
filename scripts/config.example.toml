@@ -21,11 +21,12 @@ kind = "opencode-server"     # "opencode-server" or "opencode-cli"
 serverUrl = "http://127.0.0.1:4096"
 opencodePath = "opencode"
 
-# Hearing the room in a meeting (optional). The paths below are printed by
-# scripts/install-whisper.ps1, which fetches whisper.cpp and a multilingual base
-# model into %LOCALAPPDATA%\SignalConnector\whisper. Until both are set, a meeting
-# still runs but nothing spoken is transcribed. Audio is never kept: one temp WAV
-# per utterance, deleted right after the local run.
+# Hearing the room and talking back in a meeting (optional). The paths below are
+# printed by scripts/install-whisper.ps1, which fetches whisper.cpp and a
+# multilingual base model into %LOCALAPPDATA%\SignalConnector\whisper. Until both
+# are set, a meeting still runs but nothing spoken is transcribed. Audio is never
+# kept: one temp WAV per utterance and per spoken clip, deleted right after the
+# local run. Speaking uses the Windows system voice — no download, no hosted API.
 [voice]
 # whisperPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\whisper-cli.exe'
 # modelPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\models\ggml-base.bin'
@@ -33,6 +34,9 @@ language = "auto"            # "auto", "en", "fr", ...
 rmsFloor = 0.01              # audio below this RMS is room tone, not speech
 silenceMs = 900              # silence after speech that closes an utterance
 maxUtteranceMs = 15000       # the longest single utterance, in milliseconds
+voiceName = ""               # Windows system voice; "" picks the default
+rate = 0                     # speaking rate, -10..10 (0 is the voice's pace)
+maxSpeechChars = 600         # longest answer spoken aloud; the group keeps it all
 
 [outbound]
 minIntervalMs = 1500         # minimum spacing between sends
