@@ -66,6 +66,10 @@ export const ConfigSchema = z.object({
        * invented sentences over room tone.
        */
       vadPath: z.string().default(""),
+      /** The fetched Piper binary; with piperVoicePath, it speaks instead of SAPI. */
+      piperPath: z.string().default(""),
+      /** The Piper `.onnx` speaker model; its `.onnx.json` sits beside it. */
+      piperVoicePath: z.string().default(""),
       /** Spoken language; "auto" lets the model decide. */
       language: z.string().default("auto"),
       /** RMS below which audio counts as room tone, not speech (0..1). */
@@ -91,6 +95,8 @@ export const ConfigSchema = z.object({
       whisperPath: "",
       modelPath: "",
       vadPath: "",
+      piperPath: "",
+      piperVoicePath: "",
       language: "auto",
       rmsFloor: 0.01,
       minUtteranceMs: 300,

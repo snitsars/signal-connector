@@ -32,12 +32,16 @@ opencodePath = "opencode"
 # whisperPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\whisper-cli.exe'
 # modelPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\models\ggml-small.bin'
 # vadPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\models\ggml-silero-v6.2.0.bin'
+# Natural local voice (optional). Both paths set = Piper speaks; empty = the
+# Windows system voice is used. Fetched by scripts/install-piper.ps1.
+# piperPath = 'C:\Users\you\AppData\Local\SignalConnector\piper\piper\piper.exe'
+# piperVoicePath = 'C:\Users\you\AppData\Local\SignalConnector\piper\voices\uk_UA-oleksa-high.onnx'
 language = "auto"              # pin the language you speak; "auto" misfires on short clips
 rmsFloor = 0.01                # audio below this RMS is room tone, not speech
 minUtteranceMs = 300           # a shorter window is a click, not a question
 silenceMs = 900                # silence after speech that closes an utterance
 maxUtteranceMs = 15000         # the longest single utterance, in milliseconds
-ackCooldownMs = 4000           # at most one "On it" per this window
+ackCooldownMs = 4000           # at most one spoken acknowledgement per this window
 bargeInMs = 400                # sustained speech before the answer is stopped
 voiceName = ""                 # Windows system voice; "" picks the default
 rate = 0                       # speaking rate, -10..10 (0 is the voice's pace)

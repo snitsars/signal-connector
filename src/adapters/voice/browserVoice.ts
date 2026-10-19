@@ -35,6 +35,7 @@ import {
   type RoomAudioFrame,
 } from "./pcm.js";
 import { SapiSynthesizer, type Synthesizer } from "./sapi.js";
+import { PiperSynthesizer } from "./piper.js";
 import { pcmToWav } from "./wav.js";
 import {
   WhisperTranscriber,
@@ -43,7 +44,7 @@ import {
 } from "./whisper.js";
 
 /** The one thing the avatar says before it has anything to report. */
-export const ACK_TEXT = "On it.";
+export const ACK_TEXT = "Добре.";
 
 /**
  * The longest text that is spoken. A long report would otherwise be read out
@@ -159,11 +160,17 @@ export class BrowserVoice implements VoicePort {
     this.workDir = options.workDir;
     this.synthesizer =
       options.synthesizer ??
-      new SapiSynthesizer({
-        workDir: options.workDir,
-        rate: options.config.rate,
-        voiceName: options.config.voiceName,
-      });
+      (options.config.piperPath.trim() && options.config.piperVoicePath.trim()
+        ? new PiperSynthesizer({
+            command: options.config.piperPath,
+            voicePath: options.config.piperVoicePath,
+            workDir: options.workDir,
+          })
+        : new SapiSynthesizer({
+            workDir: options.workDir,
+            rate: options.config.rate,
+            voiceName: options.config.voiceName,
+          }));
     this.sink = options.sink;
     this.transcriber =
       options.transcriber ??
@@ -345,7 +352,7 @@ export class BrowserVoice implements VoicePort {
   /** Say the acknowledgement the page already has in memory. */
   private acknowledge(input: StartListeningInput): Promise<void> {
     // Fragments cut one after another must not turn the room into a chorus of
-    // "On it": the task still starts, but the acknowledgement is rate-limited.
+    // "Добре": the task still starts, but the acknowledgement is rate-limited.
     const now = Date.now();
     if (now - this.lastAckAt < this.config.ackCooldownMs) return Promise.resolve();
     this.lastAckAt = now;

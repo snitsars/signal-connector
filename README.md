@@ -168,7 +168,7 @@ rmsFloor = 0.01          # audio below this RMS is room tone, not speech
 minUtteranceMs = 300     # a shorter window is a click, not a question
 silenceMs = 900          # silence that closes an utterance
 maxUtteranceMs = 15000   # the longest single utterance
-ackCooldownMs = 4000     # at most one "On it" per this window
+ackCooldownMs = 4000     # at most one spoken acknowledgement per this window
 bargeInMs = 400          # sustained speech before the answer is stopped
 ```
 
@@ -183,13 +183,28 @@ the face — it is simply deaf, and says so when someone speaks.
 ### Talking back
 
 The avatar also answers out loud, through the same synthetic microphone the room already
-receives — no new stream, socket or protocol. Speech is made **locally** by the Windows system
-voice (SAPI, driven through PowerShell), so there is nothing to download and no hosted API.
+receives — no new stream, socket or protocol. Speech is made **locally**: Piper, a neural
+voice fetched the way whisper.cpp is, speaks when it is configured; otherwise the Windows system
+voice (SAPI) is the fallback. Nothing is hosted and no API key is involved.
+
+```powershell
+pwsh scripts/install-piper.ps1 -Voice oleksa   # male, high; or mykyta, tetiana, ukrainian_tts
+```
+
+Paste the two printed keys into the existing `[voice]` table:
+
+```toml
+piperPath = 'C:\Users\you\AppData\Local\SignalConnector\piper\piper\piper.exe'
+piperVoicePath = 'C:\Users\you\AppData\Local\SignalConnector\piper\voices\uk_UA-oleksa-high.onnx'
+```
+
+With both set, the avatar speaks with Piper; with either missing it falls back to SAPI. A
+missing voice or a failed run is posted once in the group and the meeting keeps running.
 
 A spoken question gets a short acknowledgement the moment the utterance is cut — that clip is
-made once when listening starts, so a cold PowerShell start cannot blow the two-second budget —
-and the task's summary is spoken when the task finishes. The acknowledgement is rate-limited by
-`ackCooldownMs`, so a burst of fragments cannot turn the room into a chorus of "On it". A task
+made once when listening starts, so a cold local run cannot blow the two-second budget — and the
+task's summary is spoken when the task finishes. The acknowledgement is rate-limited by
+`ackCooldownMs`, so a burst of fragments cannot turn the room into a chorus of acknowledgements. A task
 started by **typing** in the group is never spoken.
 
 While a meeting is live, a permission waiting for an answer is announced aloud too; the decision
@@ -327,7 +342,8 @@ Scripts:
 | `scripts/setup.ps1` | ensure Java 25, install signal-cli, write `%APPDATA%\SignalConnector\config.toml`, print next steps |
 | `scripts/ensure-java.ps1` | verify/install Microsoft OpenJDK 25 via winget |
 | `scripts/install-signal-cli.ps1` | download latest signal-cli into `%LOCALAPPDATA%\SignalConnector\signal-cli`, print `signal-cli.bat` |
-| `scripts/install-whisper.ps1` | download whisper.cpp and a multilingual base model into `%LOCALAPPDATA%\SignalConnector\whisper`, print the `[voice]` paths |
+| `scripts/install-whisper.ps1` | download whisper.cpp, a multilingual model and the Silero VAD model into `%LOCALAPPDATA%\SignalConnector\whisper`, print the `[voice]` paths |
+| `scripts/install-piper.ps1` | download Piper and a Ukrainian neural voice into `%LOCALAPPDATA%\SignalConnector\piper`, print `piperPath` / `piperVoicePath` |
 | `scripts/start-opencode.ps1` | start `opencode serve` on `127.0.0.1:4096` if not already up |
 | `scripts/link-device.ps1` | run `npm run link` (device QR) |
 | `scripts/run.ps1` | run the daemon (`npm run dev`) |
