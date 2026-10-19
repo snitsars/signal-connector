@@ -337,6 +337,18 @@ export class BrowserMeeting implements MeetingPort {
         return;
       }
 
+      // A provider can refuse the guest outright (Meet now does for an
+      // anonymous browser). Waiting for an admission that cannot come wastes
+      // the budget, so name the refusal as soon as the page shows it.
+      if (admission === "refused") {
+        await this.end(
+          session,
+          "failed",
+          "the room refused the avatar — the provider requires an invited or signed-in participant",
+        );
+        return;
+      }
+
       if (!session.inRoom) {
         const expired = Date.now() >= session.admissionDeadline;
         let publishing = false;

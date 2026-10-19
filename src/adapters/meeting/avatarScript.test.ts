@@ -202,6 +202,23 @@ describe("JOIN_CLICK_EXPRESSION", () => {
     expect(click({ querySelectorAll: () => [] })).toEqual({ found: false, clicked: false });
   });
 
+  it("clicks a provider's own pre-join button (Jitsi says \"Join meeting\")", () => {
+    let clicks = 0;
+    const control = {
+      disabled: false,
+      textContent: "Join meeting",
+      getAttribute: () => null,
+      click: () => {
+        clicks += 1;
+      },
+    };
+    expect(click({ querySelectorAll: () => [control] })).toEqual({
+      found: true,
+      clicked: true,
+    });
+    expect(clicks).toBe(1);
+  });
+
   it("finds a disabled control but does not click it", () => {
     let clicks = 0;
     const control = {
@@ -221,6 +238,19 @@ describe("JOIN_CLICK_EXPRESSION", () => {
 });
 
 describe("ADMISSION_EXPRESSION", () => {
+  const run = new Function("document", `return ${ADMISSION_EXPRESSION};`) as (
+    page: unknown,
+  ) => string;
+  const page = (text: string, buttons: Array<{ text?: string; label?: string }> = []) => ({
+    body: { innerText: text },
+    querySelector: () => null,
+    querySelectorAll: () =>
+      buttons.map((b) => ({
+        textContent: b.text ?? "",
+        getAttribute: (name: string) => (name === "aria-label" ? (b.label ?? "") : null),
+      })),
+  });
+
   it("is a self-contained page probe", () => {
     expect(ADMISSION_EXPRESSION).toContain("in-room");
     expect(ADMISSION_EXPRESSION).toContain("joining");
@@ -229,15 +259,38 @@ describe("ADMISSION_EXPRESSION", () => {
   });
 
   it("returns unknown on a page with no matching markup", () => {
-    const run = new Function("document", `return ${ADMISSION_EXPRESSION};`) as (
-      page: unknown,
-    ) => string;
-    // A document with no matching markup.
-    const page = {
-      querySelector: () => null,
-      querySelectorAll: () => [],
-    };
-    expect(run(page)).toBe("unknown");
+    expect(run(page(""))).toBe("unknown");
+  });
+
+  it("reads a queued knock as the lobby, not as the end", () => {
+    // Google Meet's waiting room says this and offers "Return to home screen";
+    // treating that button as an ending killed the room seconds after joining.
+    expect(run(page("Asking to be let in…\nReturn to home screen"))).toBe("joining");
+  });
+
+  it("reads an unambiguous ending as ended even with the lobby's button present", () => {
+    expect(run(page("You left the call\nRejoin\nReturn to home screen"))).toBe("ended");
+  });
+
+  it("admits only the call's own leave control", () => {
+    expect(run(page("", [{ label: "Leave call" }]))).toBe("in-room");
+    // Jitsi's wording carries "the"; missing it left the avatar stuck outside.
+    expect(run(page("", [{ label: "Leave the call" }]))).toBe("in-room");
+    expect(run(page("", [{ label: "Leave the meeting" }]))).toBe("in-room");
+  });
+
+  it("does not mistake Jitsi's pre-join back button for the room", () => {
+    // The pre-join screen offers "Join meeting" and also a "Leave the meeting"
+    // back arrow; the avatar was latched as in-room and never clicked join.
+    const prejoin = page("Join meeting\nYour devices are working properly", [
+      { label: "Join meeting", text: "Join meeting" },
+      { label: "Leave the meeting" },
+    ]);
+    expect(run(prejoin)).toBe("joining");
+  });
+
+  it("names a hard refusal instead of waiting for a knock that cannot come", () => {
+    expect(run(page("You can't join this video call\nReturn to home screen"))).toBe("refused");
   });
 });
 

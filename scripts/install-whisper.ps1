@@ -103,29 +103,56 @@ if ($existingExe -and (Test-Path $existingModel) -and (Test-WhisperRuns -Exe $ex
     exit 0
 }
 
+# Pick a Windows zip out of one release, preferring the plain x64 build.
+function Select-WhisperAsset {
+    param($Release)
+    if (-not $Release -or -not $Release.assets) { return $null }
+    $picked = $Release.assets | Where-Object { $_.name -eq 'whisper-bin-x64.zip' } | Select-Object -First 1
+    if (-not $picked) {
+        $picked = $Release.assets |
+            Where-Object { $_.name -match '^whisper.*bin.*x64\.zip$' -and $_.name -notmatch 'cuda|cublas|blas' } |
+            Select-Object -First 1
+    }
+    if (-not $picked) {
+        $picked = $Release.assets | Where-Object { $_.name -match '\.zip$' -and $_.name -match 'x64' } | Select-Object -First 1
+    }
+    if (-not $picked) {
+        $picked = $Release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
+    }
+    return $picked
+}
+
 Write-Host "Fetching the latest whisper.cpp release..."
+$headers = @{ 'User-Agent' = 'SignalConnector' }
 try {
     $release = Invoke-RestMethod `
         -Uri 'https://api.github.com/repos/ggerganov/whisper.cpp/releases/latest' `
-        -Headers @{ 'User-Agent' = 'SignalConnector' } `
+        -Headers $headers `
         -UseBasicParsing
 } catch {
     throw "Cannot read the whisper.cpp release feed (no network, or GitHub refused): $($_.Exception.Message)"
 }
-if (-not $release -or -not $release.assets -or $release.assets.Count -eq 0) {
-    throw "The whisper.cpp release feed returned no assets."
-}
 
-# Prefer the plain x64 Windows build; fall back to any x64 zip.
-$asset = $release.assets | Where-Object { $_.name -match '^whisper.*bin.*x64.*\.zip$' } | Select-Object -First 1
+# A release tag can be source-only (v1.9.4 and v1.9.5 both are); the Windows
+# builds live on nearby build tags, so walk the list until one carries a zip.
+$asset = Select-WhisperAsset $release
 if (-not $asset) {
-    $asset = $release.assets | Where-Object { $_.name -match '\.zip$' -and $_.name -match 'x64' } | Select-Object -First 1
+    Write-Host "The latest release ($($release.tag_name)) has no binaries; looking back..."
+    try {
+        $releases = Invoke-RestMethod `
+            -Uri 'https://api.github.com/repos/ggerganov/whisper.cpp/releases?per_page=30' `
+            -Headers $headers `
+            -UseBasicParsing
+    } catch {
+        throw "Cannot list whisper.cpp releases (no network, or GitHub refused): $($_.Exception.Message)"
+    }
+    foreach ($candidate in @($releases)) {
+        $asset = Select-WhisperAsset $candidate
+        if ($asset) { $release = $candidate; break }
+    }
 }
 if (-not $asset) {
-    $asset = $release.assets | Where-Object { $_.name -match '\.zip$' } | Select-Object -First 1
-}
-if (-not $asset) {
-    throw "No Windows .zip asset found in whisper.cpp $($release.tag_name)."
+    throw "No Windows .zip asset found in the 30 most recent whisper.cpp releases."
 }
 
 $zip = Join-Path $env:TEMP ("signalconnector-whisper-" + [guid]::NewGuid().ToString('N') + ".zip")

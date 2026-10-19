@@ -229,6 +229,18 @@ export function buildAvatarScript(): string {
     if (!base64) return { queued: false, speaking: speech.playing };
     const graph = ensureSpeaker();
     if (!graph) return { queued: false, speaking: false };
+    // A provider may mute the synthetic microphone (Jitsi disables the track on
+    // join), and a disabled track carries silence no matter what the graph
+    // plays. Asking to speak is asking to be heard, so re-enable it here.
+    try {
+      if (state.audio) {
+        state.audio.getAudioTracks().forEach((track) => {
+          if (!track.enabled) track.enabled = true;
+        });
+      }
+    } catch (err) {
+      /* a track that cannot be touched is reported by the room itself */
+    }
     // A context suspended by the autoplay policy is resumed on the first clip
     // instead of failing silently. The browser is started with
     // --autoplay-policy=no-user-gesture-required, so this is a safety net.
@@ -510,12 +522,21 @@ export const ADMISSION_EXPRESSION = `(() => {
   const label = (el) => ((el.getAttribute("aria-label") || "") + " " + (el.textContent || "")).toLowerCase();
   const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
   const pageText = (document.body ? document.body.innerText : "").toLowerCase();
-  if (/waiting to be (admitted|let in)|someone will let you in|you are waiting|you're waiting/.test(pageText)) return "joining";
-  if (buttons.some((b) => /leave call|end call|hang up/.test(label(b)))) return "in-room";
-  if (/you left the call|rejoin|return to home screen/.test(pageText)) return "ended";
+  // A hard refusal is terminal: no knock, no lobby, no admission to wait for.
+  if (/you can't join this video call|you can\u2019t join this video call|no one can join a meeting unless/.test(pageText)) return "refused";
+  // Unambiguous endings only. "Return to home screen" is also the way out of
+  // the waiting room, so it cannot decide that the call is over.
+  if (/you left the call|you've left the call|the meeting ended|the call ended|you were removed/.test(pageText)) return "ended";
+  // The lobby, however the provider words it: a knock that is queued, or the
+  // waiting room's own "Return to home screen" control.
+  if (/asking to be let in|waiting to be (admitted|let in)|someone will let you in|you are waiting|you're waiting|you'll be let in|will let you in|waiting for a moderator|return to home screen/.test(pageText)) return "joining";
+  // The pre-join screen has a "Leave the meeting" back button of its own, so a
+  // leave control alone proves nothing: the join control has to be gone first.
+  const joinControl = buttons.some((b) => /join meeting|join now|ask to join|request to join|join the call/.test(label(b)));
+  if (!joinControl && buttons.some((b) => /leave|hang ?up|end (the )?call/.test(label(b)))) return "in-room";
   const nameField = document.querySelector('input[aria-label*="name" i], input[placeholder*="name" i]');
   if (nameField) return "joining";
-  if (buttons.some((b) => /ask to join|join now/.test(label(b)))) return "joining";
+  if (joinControl) return "joining";
   return "unknown";
 })()`;
 
@@ -528,7 +549,7 @@ export const ADMISSION_EXPRESSION = `(() => {
 export const JOIN_CLICK_EXPRESSION = `(() => {
   const label = (el) => ((el.getAttribute("aria-label") || "") + " " + (el.textContent || "")).toLowerCase();
   const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
-  const control = buttons.find((b) => /ask to join|join now|request to join|join the call/.test(label(b)));
+  const control = buttons.find((b) => /ask to join|join now|request to join|join the call|join meeting/.test(label(b)));
   if (!control) return { found: false, clicked: false };
   if (control.disabled || control.getAttribute("aria-disabled") === "true") {
     return { found: true, clicked: false };
