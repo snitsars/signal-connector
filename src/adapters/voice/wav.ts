@@ -40,3 +40,37 @@ export function pcmToWav(samples: Int16Array, sampleRate = SAMPLE_RATE): Buffer 
   const data = Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
   return Buffer.concat([wavHeader(data.byteLength, sampleRate), data]);
 }
+
+/**
+ * Peak-normalise speech before transcription. A phone or headset path can arrive
+ * very quiet, and the transcriber's voice-activity filter then rejects real
+ * speech as non-speech — measured live at roughly a fifteenth of full scale.
+ * Near-silence stays untouched (the filter must still reject room tone), and
+ * the gain is capped so a faint clip cannot turn into amplified noise.
+ */
+export function normalizeSamples(
+  samples: Int16Array,
+  options: { targetPeak?: number; minimumPeak?: number; maxGain?: number } = {},
+): Int16Array {
+  const targetPeak = options.targetPeak ?? 0.6;
+  const minimumPeak = options.minimumPeak ?? 0.01;
+  const maxGain = options.maxGain ?? 24;
+
+  let peak = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    const value = Math.abs(samples[i] ?? 0);
+    if (value > peak) peak = value;
+  }
+  // Below the floor this is room tone, not speech: leave it as it is.
+  if (peak === 0 || peak < minimumPeak * 32768) return samples;
+
+  const gain = Math.min(maxGain, (targetPeak * 32768) / peak);
+  if (gain <= 1.05) return samples;
+
+  const out = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; i += 1) {
+    const scaled = Math.round((samples[i] ?? 0) * gain);
+    out[i] = scaled > 32767 ? 32767 : scaled < -32768 ? -32768 : scaled;
+  }
+  return out;
+}

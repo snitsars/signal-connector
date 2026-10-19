@@ -36,7 +36,7 @@ import {
 } from "./pcm.js";
 import { SapiSynthesizer, type Synthesizer } from "./sapi.js";
 import { PiperSynthesizer } from "./piper.js";
-import { pcmToWav } from "./wav.js";
+import { normalizeSamples, pcmToWav } from "./wav.js";
 import {
   WhisperTranscriber,
   type TranscribeResult,
@@ -566,7 +566,7 @@ export class BrowserVoice implements VoicePort {
     let result: TranscribeResult;
     try {
       fs.mkdirSync(this.workDir, { recursive: true });
-      fs.writeFileSync(wavPath, pcmToWav(samples, SAMPLE_RATE));
+      fs.writeFileSync(wavPath, pcmToWav(normalizeSamples(samples), SAMPLE_RATE));
       result = await this.transcriber.transcribe(wavPath);
     } catch (err: unknown) {
       result = { ok: false as const, reason: `transcription failed: ${String(err)}` };
