@@ -1530,11 +1530,20 @@ describe("voice in the meeting", () => {
   }
 
   /** Everything spoken except the join greeting, which starts every meeting. */
-  const said = (): string[] => voice.spoken.filter((text) => !text.startsWith("Привіт"));
+  const said = (): string[] => voice.spoken.filter((text) => !text.startsWith("Привіт") && !text.startsWith("До зустрічі"));
 
   it("greets the room once it is listening", async () => {
     await inRoom({ keepGreeting: true });
     expect(voice.spoken[0]).toContain("під'єднався");
+    await ctx.app.stop();
+  });
+
+  it("says goodbye when the operator stops the meeting", async () => {
+    await inRoom();
+    ctx.signal.emitMessage(incoming("/meet stop"));
+    await tick();
+    await tick();
+    expect(voice.spoken).toContain("До зустрічі!");
     await ctx.app.stop();
   });
 
@@ -2043,7 +2052,7 @@ describe("meeting telemetry, presence and the watchdog", () => {
   let ctx: ReturnType<typeof makeApp>;
 
   /** Everything spoken except the join greeting, which starts every meeting. */
-  const said = (): string[] => voice.spoken.filter((text) => !text.startsWith("Привіт"));
+  const said = (): string[] => voice.spoken.filter((text) => !text.startsWith("Привіт") && !text.startsWith("До зустрічі"));
 
   /** An admitted meeting on a clock the test moves by hand. */
   async function admitted(options: { watchdogMs?: number } = {}): Promise<void> {

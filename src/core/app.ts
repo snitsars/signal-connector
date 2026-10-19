@@ -1297,6 +1297,19 @@ export class CoreApp {
 
     active.stopping = true;
     this.logger.info("meeting: leaving on request", { project: active.projectName });
+    // Say goodbye while the page is still in the room. The wait is bounded so a
+    // slow voice can never wedge /meet stop, and a failure never blocks leaving.
+    const farewell = this.config.voice.farewell.trim();
+    if (farewell && active.voice) {
+      try {
+        await Promise.race([
+          active.voice.speak(farewell),
+          new Promise<void>((resolve) => setTimeout(resolve, 6_000)),
+        ]);
+      } catch (err: unknown) {
+        this.logger.warn("voice: farewell failed", { error: String(err) });
+      }
+    }
     let result: MeetingLeaveResult | undefined;
     try {
       const handle = active.handle ?? (await active.joining?.catch(() => undefined));
