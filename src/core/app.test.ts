@@ -2195,6 +2195,33 @@ describe("meeting telemetry, presence and the watchdog", () => {
     await ctx.app.stop();
   });
 
+  it("retries the listen-only announcement when the first send fails", async () => {
+    await admitted();
+    // The group is told even when the transport refuses the first attempt.
+    ctx.signal.failNextSend = true;
+    meeting.telemetry({ presence: "someone", humans: 2, level: 0.3, audioEpoch: 1 });
+    await tick();
+    await tick();
+
+    // Speech is off at once, the group has not been told, and the guard is loud.
+    expect(voice.stoppedSpeaking).toBe(1);
+    expect(ctx.signal.sent.filter((m) => m.text.includes("listen-only"))).toHaveLength(0);
+    expect(ctx.store.getValue("health:meeting")).toContain("listen-only");
+
+    // The next report retries and succeeds exactly once.
+    meeting.telemetry({ presence: "someone", humans: 2, level: 0.3, audioEpoch: 1 });
+    await tick();
+    await tick();
+    expect(ctx.signal.sent.filter((m) => m.text.includes("listen-only"))).toHaveLength(1);
+    expect(ctx.store.getValue("health:meeting")).toBe("");
+
+    // A third report does not announce it again.
+    meeting.telemetry({ presence: "someone", humans: 2, level: 0.3, audioEpoch: 1 });
+    await tick();
+    expect(ctx.signal.sent.filter((m) => m.text.includes("listen-only"))).toHaveLength(1);
+    await ctx.app.stop();
+  });
+
   it("closes an admitted meeting that stops reporting, with one outcome and health", async () => {
     await admitted({ watchdogMs: 5 });
 

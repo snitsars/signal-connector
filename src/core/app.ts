@@ -139,6 +139,8 @@ interface ActiveMeeting {
   presence: MeetingPresence;
   /** A second human is here: hearing continues, speaking is over for good. */
   listenOnly: boolean;
+  /** The group has been told about listen-only; a failed send is retried. */
+  listenOnlyAnnounced: boolean;
 }
 
 /** How the presence word appears in the meeting message. */
@@ -794,6 +796,7 @@ export class CoreApp {
       deaf: false,
       presence: "unknown",
       listenOnly: false,
+      listenOnlyAnnounced: false,
     };
     this.activeMeeting = active;
 
@@ -953,6 +956,10 @@ export class CoreApp {
     } else if (epochChanged) {
       active.lastEpochAt = now;
     }
+
+    // A second human is announced after the audible branch so a failed send's
+    // health signal is not erased in the same pass; the next report retries.
+    await this.announceListenOnly(active);
     if (audible || active.deaf) return;
 
     const budget = this.config.meeting.silenceBudgetMs;
@@ -976,6 +983,8 @@ export class CoreApp {
     active: ActiveMeeting,
     telemetry: MeetingTelemetry,
   ): Promise<void> {
+    // The latch is permanent, but an announcement that failed is retried on the
+    // next report: silence is the safe side, yet the group must still be told.
     if (active.listenOnly) return;
     if (typeof telemetry.humans !== "number" || telemetry.humans < 2) return;
     active.listenOnly = true;
@@ -986,14 +995,22 @@ export class CoreApp {
     } catch (err: unknown) {
       this.logger.warn("voice: could not stop speech for listen-only", { error: String(err) });
     }
+  }
+
+  /**
+   * Tell the group about listen-only exactly once. A send that fails is tried
+   * again on the next report and raises a health signal meanwhile, so the guard
+   * is never quiet even if the meeting ends before a retry.
+   */
+  private async announceListenOnly(active: ActiveMeeting): Promise<void> {
+    if (!active.listenOnly || active.listenOnlyAnnounced) return;
     try {
       await this.sendProject(
         active.projectId,
         `${MARK.attention} **Meeting** · listen-only — another person is in the room, so the avatar will not speak again in this meeting.`,
       );
+      active.listenOnlyAnnounced = true;
     } catch (err: unknown) {
-      // The latch is deliberate and stays: silence is the safe side. But the
-      // group was not told, so the failure must not be quiet.
       this.raiseHealth(
         `could not announce listen-only in ${active.projectName}: ${String(err)}`,
       );

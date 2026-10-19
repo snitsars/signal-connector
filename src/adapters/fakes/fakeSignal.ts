@@ -31,6 +31,8 @@ export class FakeSignal implements SignalPort {
   readonly ops: SignalOp[] = [];
   /** Set to make sendPoll reject, as a transport without poll support would. */
   failPolls = false;
+  /** Set to make the next send reject once, as a transport hiccup would. */
+  failNextSend = false;
   private messageHandlers: ((m: IncomingMessage) => void)[] = [];
   private reactionHandlers: ((r: Reaction) => void)[] = [];
   private pollVoteHandlers: ((v: PollVote) => void)[] = [];
@@ -40,6 +42,10 @@ export class FakeSignal implements SignalPort {
   async stop(): Promise<void> {}
 
   async send(channelId: string, text: string, options?: SendOptions): Promise<OutgoingMessage> {
+    if (this.failNextSend) {
+      this.failNextSend = false;
+      throw new Error("the transport is unavailable");
+    }
     const messageId = `msg-${++this.seq}`;
     this.sent.push({ channelId, messageId, text, ...(options?.quote ? { quote: options.quote } : {}) });
     this.ops.push({ op: "send", messageId, text });
