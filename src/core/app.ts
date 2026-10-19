@@ -89,6 +89,19 @@ interface PendingChoice {
 
 const PROJECT_ID = (name: string): string => name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
 
+/**
+ * Fit a description into the budget reserved for it in a spoken announcement,
+ * trimming at a word boundary. The group message keeps the whole text.
+ */
+function capSpoken(text: string, maxChars: number): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (maxChars <= 0 || clean.length <= maxChars) return clean;
+  const cut = clean.slice(0, maxChars);
+  const lastSpace = cut.lastIndexOf(" ");
+  const trimmed = (lastSpace > maxChars * 0.6 ? cut.slice(0, lastSpace) : cut).trimEnd();
+  return `${trimmed}…`;
+}
+
 /** One live meeting, between the store claim and the closing summary. */
 interface ActiveMeeting {
   projectId: string;
@@ -622,6 +635,7 @@ export class CoreApp {
     }
     await this.agent.abort(task.id);
     this.store.updateTask(task.id, { state: "aborted", updatedAt: this.now() });
+    this.clearPendingForTask(task.id);
     await this.reply(`Aborted task ${task.id}.`);
   }
 
@@ -886,9 +900,10 @@ export class CoreApp {
 
   /**
    * A transcript the energy gate let through. It is posted in the project's
-   * group before anything runs, then handed to runTask as a prompt — the same
-   * session, status message and summary a typed task uses. Nothing here parses
-   * the words, so a spoken "approve" or "/stop" is just text.
+   * group before anything else happens, then handed to runTask as a prompt — the
+   * same session, status message and summary a typed task uses. The one
+   * exception is an approval phrase while a permission is actually pending: the
+   * room is told that decisions are typed and no task is started.
    */
   private async onHeard(active: ActiveMeeting, utterance: Utterance): Promise<void> {
     if (active.finished) return;
@@ -901,7 +916,26 @@ export class CoreApp {
     this.currentProjectId = active.projectId;
     const own = this.store.getChannel(active.projectId);
     if (own) this.conversation = own.channelId;
+    // The transcript is always in the record first, even when the words are
+    // refused below: the room must see what it said, not only the correction.
     await this.sendProject(active.projectId, `${MARK.info} heard: ${text}`);
+    // A spoken approval can only be dangerous while something waits to be
+    // approved. Say so aloud and in the group, and start nothing: the typed
+    // Signal path stays the only way to decide a permission.
+    if (
+      parseInput(text).kind === "approval" &&
+      this.livePending(this.channelFor(active.projectId)).length > 0
+    ) {
+      this.speakInMeeting(
+        active.projectId,
+        "A permission is waiting, but it is decided by typing approve, deny or always in Signal. Nothing was decided by speaking.",
+      );
+      await this.sendProject(
+        active.projectId,
+        `${MARK.attention} **Not decided** · a spoken word cannot answer a permission. Type **approve**, **deny** or **always** in Signal.`,
+      );
+      return;
+    }
     await this.runTask(project, text, { voice: true, meetingStartedAt: active.startedAt });
   }
 
@@ -928,6 +962,24 @@ export class CoreApp {
     } catch (err: unknown) {
       this.logger.warn("voice: stopping failed", { error: String(err) });
     }
+  }
+
+  /**
+   * Say something into the room of the meeting hearing this project. Fire and
+   * forget: awaiting synthesis here would block `/meet stop`, approvals and
+   * every later event, so a slow or held clip must never hold the chain. A
+   * failure is logged and the meeting keeps running.
+   */
+  private speakInMeeting(projectId: string, text: string): void {
+    const active = this.activeMeeting;
+    if (!active || active.finished || active.projectId !== projectId) return;
+    const handle = active.voice;
+    if (!handle) return;
+    // The adapter owns the one final cap (VoiceHandle.speak); the permission
+    // announcement has already fitted its description into the budget.
+    void handle.speak(text).catch((err: unknown) => {
+      this.logger.warn("voice: could not speak into the meeting", { error: String(err) });
+    });
   }
 
   /**
@@ -1091,6 +1143,7 @@ export class CoreApp {
         updatedAt: this.now(),
       });
       const done = this.store.getTask(task.id)!;
+      this.clearPendingForTask(done.id);
       await this.editStatus(done);
       await this.sendProject(done.projectId, summaryText(done));
       // A spoken question is answered aloud once the work finishes; the group
@@ -1109,6 +1162,7 @@ export class CoreApp {
         updatedAt: this.now(),
       });
       const failed = this.store.getTask(task.id)!;
+      this.clearPendingForTask(failed.id);
       await this.editStatus(failed);
       await this.sendProject(failed.projectId, summaryText(failed));
       // A failure of a spoken task is spoken too, so the room is not left
@@ -1391,6 +1445,46 @@ export class CoreApp {
     this.store.setValue(`pending:${channel}`, JSON.stringify(list));
   }
 
+  /**
+   * The pending approvals that can still be decided: their task is running.
+   * A row whose task ended is dropped and the pruned list persisted, so a
+   * stale entry can neither refuse speech nor survive a restart.
+   */
+  private livePending(channel: string): PendingApproval[] {
+    const list = this.pending(channel);
+    const live = list.filter((p) => {
+      const state = this.store.getTask(p.taskId)?.state;
+      return state === "started" || state === "running";
+    });
+    if (live.length !== list.length) this.setPending(live, channel);
+    return live;
+  }
+
+  /** Drop a task's approvals from every channel's list, and persist the change. */
+  private clearPendingForTask(taskId: string): void {
+    for (const key of this.store.listKeys("pending:")) {
+      const channel = key.slice("pending:".length);
+      const list = this.pending(channel);
+      const kept = list.filter((p) => p.taskId !== taskId);
+      if (kept.length !== list.length) this.setPending(kept, channel);
+    }
+  }
+
+  /**
+   * The permission news read aloud. The head and the typed-decision
+   * instruction are always spoken; only the description is fitted into what is
+   * left, so a long command cannot swallow the instruction. The adapter applies
+   * the one final cap to the clip.
+   */
+  private permissionAnnouncement(tool: string, description: string): string {
+    const instruction = "Decide by typing approve, deny or always in Signal.";
+    const head = `Approval needed for ${tool}: `;
+    // One space before the instruction, and the ellipsis capSpoken adds.
+    const budget = this.config.voice.maxSpeechChars - head.length - instruction.length - 2;
+    const detail = budget > 0 ? capSpoken(description, budget) : "";
+    return detail ? `${head}${detail} ${instruction}` : `${head}${instruction}`;
+  }
+
   private async handlePermission(event: AgentEvent, task: Task): Promise<void> {
     const channel = this.channelFor(task.projectId);
     const p = event.permission;
@@ -1423,6 +1517,12 @@ export class CoreApp {
       messageId: sent.messageId,
     });
     this.setPending(list, channel);
+    // The group has the full prompt; the room gets the same news in a short
+    // clip. Speech is fire-and-forget, so a held voice never delays the event.
+    this.speakInMeeting(
+      task.projectId,
+      this.permissionAnnouncement(p.tool, p.description),
+    );
   }
 
   private async resolveApproval(

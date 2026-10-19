@@ -103,6 +103,8 @@ export interface Store {
 
   getValue(key: string): string | undefined;
   setValue(key: string, value: string): void;
+  /** Every key starting with `prefix`, in no particular order. */
+  listKeys(prefix: string): string[];
 
   close(): void;
 }
@@ -294,6 +296,12 @@ export function openStore(path: string): Store {
         `INSERT INTO kv (key, value) VALUES (?, ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
       ).run(key, value);
+    },
+    listKeys(prefix) {
+      return db
+        .prepare(`SELECT key FROM kv WHERE substr(key, 1, ?) = ?`)
+        .all(prefix.length, prefix)
+        .map((row) => String(row.key));
     },
 
     close() {

@@ -1559,7 +1559,37 @@ describe("voice in the meeting", () => {
     await ctx.app.stop();
   });
 
-  it("treats a spoken approval as text and decides no permission", async () => {
+  it("speaks a waiting permission and leaves the group prompt unchanged", async () => {
+    await inRoom();
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const taskId = ctx.agent.started[0]!.taskId;
+
+    ctx.agent.emit({
+      type: "permission",
+      taskId,
+      at: Date.now(),
+      permission: { id: "p1", taskId, tool: "bash", description: "run ls", safe: false },
+    });
+    await tick();
+    await tick();
+
+    const prompt = ctx.signal.sent.find((m) => m.text.includes("Approval needed"))!;
+    expect(prompt.channelId).toBe("group-1-demo");
+    expect(prompt.text).toContain("bash");
+    expect(prompt.text).toContain("run ls");
+    expect(prompt.text).toContain("Reply approve");
+
+    // The room hears what is needed and that the decision is typed.
+    const spoken = voice.spoken.at(-1)!;
+    expect(spoken).toContain("bash");
+    expect(spoken).toContain("run ls");
+    expect(spoken).toContain("typing approve");
+    expect(ctx.agent.decisions).toHaveLength(0);
+    await ctx.app.stop();
+  });
+
+  it("refuses a spoken approval while a permission waits, and says why", async () => {
     await inRoom();
     ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
     await tick();
@@ -1571,17 +1601,194 @@ describe("voice in the meeting", () => {
       permission: { id: "p1", taskId, tool: "bash", description: "run ls", safe: false },
     });
     await tick();
-    expect(ctx.agent.decisions).toHaveLength(0);
+    const tasksBefore = ctx.agent.started.length;
 
     voice.utterance("approve");
     await tick();
     await tick();
 
-    // No permission is answered and no task stopped: the words are only a prompt.
+    // The transcript stays in the record, but decides nothing and starts nothing.
     expect(ctx.agent.decisions).toHaveLength(0);
     expect(ctx.agent.aborted).toHaveLength(0);
-    expect(ctx.agent.started.at(-1)?.prompt).toBe("approve");
+    expect(ctx.agent.started).toHaveLength(tasksBefore);
     expect(ctx.signal.sent.some((m) => m.text.includes("heard: approve"))).toBe(true);
+    expect(voice.spoken.at(-1)).toContain("decided by typing");
+    const note = ctx.signal.sent.at(-1)!;
+    expect(note.channelId).toBe("group-1-demo");
+    expect(note.text).toContain("spoken word cannot answer a permission");
+    expect(note.text).toContain("approve");
+    expect(note.text).toContain("deny");
+    expect(note.text).toContain("always");
+    await ctx.app.stop();
+  });
+
+  it("still treats a spoken yes as a prompt when nothing is pending", async () => {
+    await inRoom();
+    const tasksBefore = ctx.agent.started.length;
+
+    voice.utterance("yes");
+    await tick();
+    await tick();
+
+    expect(ctx.agent.started).toHaveLength(tasksBefore + 1);
+    expect(ctx.agent.started.at(-1)?.prompt).toBe("yes");
+    expect(ctx.signal.sent.some((m) => m.text.includes("heard: yes"))).toBe(true);
+    expect(ctx.signal.sent.some((m) => m.text.includes("spoken word cannot"))).toBe(false);
+    expect(voice.spoken).toHaveLength(0);
+    await ctx.app.stop();
+  });
+
+  it("does not let a held permission announcement delay the prompt or the next event", async () => {
+    await inRoom();
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const taskId = ctx.agent.started[0]!.taskId;
+
+    voice.holdSpeech();
+    ctx.agent.emit({
+      type: "permission",
+      taskId,
+      at: Date.now(),
+      permission: { id: "p1", taskId, tool: "bash", description: "run ls", safe: false },
+    });
+    await tick();
+
+    // The prompt is in the group while the clip is still held in flight.
+    expect(ctx.signal.sent.some((m) => m.text.includes("Approval needed"))).toBe(true);
+
+    ctx.agent.emit({ type: "idle", taskId, at: Date.now(), summary: "done while held" });
+    await tick();
+    await tick();
+    expect(ctx.store.getTask(taskId)?.state).toBe("done");
+
+    voice.releaseSpeech();
+    await ctx.app.stop();
+  });
+
+  it("lets ordinary speech run again after a task is stopped", async () => {
+    await inRoom();
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const taskId = ctx.agent.started[0]!.taskId;
+    ctx.agent.emit({
+      type: "permission",
+      taskId,
+      at: Date.now(),
+      permission: { id: "p1", taskId, tool: "bash", description: "run ls", safe: false },
+    });
+    await tick();
+
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "/stop"));
+    await tick();
+    expect(ctx.store.getTask(taskId)?.state).toBe("aborted");
+    expect(ctx.store.getValue("pending:group-1-demo")).toBe("[]");
+
+    const tasksBefore = ctx.agent.started.length;
+    voice.utterance("yes");
+    await tick();
+    await tick();
+
+    // The stopped task's stale approval no longer refuses ordinary speech.
+    expect(ctx.agent.started).toHaveLength(tasksBefore + 1);
+    expect(ctx.agent.started.at(-1)?.prompt).toBe("yes");
+    expect(ctx.agent.decisions).toHaveLength(0);
+    await ctx.app.stop();
+  });
+
+  it("does not refuse speech for a pending approval whose task already ended", async () => {
+    await inRoom();
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const taskId = ctx.agent.started[0]!.taskId;
+    ctx.agent.emit({
+      type: "permission",
+      taskId,
+      at: Date.now(),
+      permission: { id: "p1", taskId, tool: "bash", description: "run ls", safe: false },
+    });
+    await tick();
+
+    // The task ends without a terminal event, so the pending row is still there.
+    ctx.store.updateTask(taskId, { state: "done", updatedAt: Date.now() });
+    expect(ctx.store.getValue("pending:group-1-demo")).not.toBe("[]");
+
+    voice.utterance("yes");
+    await tick();
+    await tick();
+
+    expect(ctx.agent.started.at(-1)?.prompt).toBe("yes");
+    expect(ctx.agent.decisions).toHaveLength(0);
+    // The stale row is dropped and the pruned list persisted.
+    expect(ctx.store.getValue("pending:group-1-demo")).toBe("[]");
+    await ctx.app.stop();
+  });
+
+  it("caps a long permission description aloud but keeps it whole in the group", async () => {
+    await inRoom();
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const taskId = ctx.agent.started[0]!.taskId;
+    const description = "a very long command ".repeat(80).trim();
+
+    ctx.agent.emit({
+      type: "permission",
+      taskId,
+      at: Date.now(),
+      permission: { id: "p1", taskId, tool: "bash", description, safe: false },
+    });
+    await tick();
+    await tick();
+
+    const spoken = voice.spoken.at(-1)!;
+    // The description is trimmed, but the typed instruction always survives.
+    expect(spoken.length).toBeLessThanOrEqual(600);
+    expect(spoken).not.toContain(description);
+    expect(spoken).toContain("typing approve");
+    expect(spoken.endsWith("Signal.")).toBe(true);
+    const prompt = ctx.signal.sent.find((m) => m.text.includes("Approval needed"))!;
+    expect(prompt.text).toContain(description);
+    await ctx.app.stop();
+  });
+
+  it("does not speak a permission into a meeting hearing another project", async () => {
+    const projects = [
+      {
+        name: "demo",
+        path: "/tmp/demo",
+        session: "ses_pinned",
+        meet: { allow: [{ id: "+1000", label: "+1000" }], providers: ["meet.jit.si"] },
+      },
+      { name: "other", path: "/tmp/other" },
+    ];
+    meeting = new FakeMeeting();
+    voice = new FakeVoice();
+    ctx = makeApp(projects, {}, undefined, meeting, reachable, undefined, voice);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    meeting.admit();
+    await tick();
+    await tick();
+
+    ctx.signal.emitMessage(incoming("/open other"));
+    await tick();
+    ctx.signal.emitMessage(incomingIn("group-2-other", "work in the other project"));
+    await tick();
+    const taskId = ctx.agent.started.at(-1)!.taskId;
+    ctx.agent.emit({
+      type: "permission",
+      taskId,
+      at: Date.now(),
+      permission: { id: "p1", taskId, tool: "bash", description: "run ls", safe: false },
+    });
+    await tick();
+    await tick();
+
+    expect(ctx.signal.sent.some((m) => m.text.includes("Approval needed"))).toBe(true);
+    expect(voice.spoken).toHaveLength(0);
     await ctx.app.stop();
   });
 

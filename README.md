@@ -142,11 +142,12 @@ A meeting is also a microphone for the project's session. Once the avatar is adm
 speech is copied inside the page, gated by energy, transcribed **locally** and posted in the
 project's group as `heard: <text>` before it is sent to the same session a typed task uses.
 
-Nothing heard is ever a command, an approval or a stop: a spoken "approve" reaches the agent
-as the words "approve" and decides no permission. Audio that never rises above the noise floor
-is dropped and counted instead of being transcribed, so a small model cannot invent an
-instruction out of room tone. A missing or failing transcriber is posted in the group with its
-reason, and the meeting keeps running.
+Nothing heard is ever a command, an approval or a stop: a spoken "approve" decides no
+permission — while one waits it is refused aloud and explained in the group, and otherwise it
+is an ordinary prompt. Audio that never rises above the noise floor is dropped and counted
+instead of being transcribed, so a small model cannot invent an instruction out of room tone. A
+missing or failing transcriber is posted in the group with its reason, and the meeting keeps
+running.
 
 The tool and model are fetched, never installed from npm and never hosted:
 
@@ -181,6 +182,9 @@ A spoken question gets a short acknowledgement the moment the utterance is cut �
 made once when listening starts, so a cold PowerShell start cannot blow the two-second budget —
 and the task's summary is spoken when the task finishes. A task started by **typing** in the
 group is never spoken.
+
+While a meeting is live, a permission waiting for an answer is announced aloud too; the decision
+is still typed in Signal (**approve**, **deny** or **always**), never spoken.
 
 Three rules keep it from being a nuisance: the operator's own voice stops the avatar
 mid-sentence and drops the clips still queued behind it; a failure of the voice is posted once
