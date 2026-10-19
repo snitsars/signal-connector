@@ -136,6 +136,41 @@ refusal names its own category — “not authorised”, “malformed link”, �
 meeting provider”, “could not reach the room”, “already running” — and never echoes the
 link.
 
+### Hearing the room
+
+A meeting is also a microphone for the project's session. Once the avatar is admitted,
+speech is copied inside the page, gated by energy, transcribed **locally** and posted in the
+project's group as `heard: <text>` before it is sent to the same session a typed task uses.
+
+Nothing heard is ever a command, an approval or a stop: a spoken "approve" reaches the agent
+as the words "approve" and decides no permission. Audio that never rises above the noise floor
+is dropped and counted instead of being transcribed, so a small model cannot invent an
+instruction out of room tone. A missing or failing transcriber is posted in the group with its
+reason, and the meeting keeps running.
+
+The tool and model are fetched, never installed from npm and never hosted:
+
+```powershell
+pwsh scripts/install-whisper.ps1     # whisper.cpp + the multilingual base model
+```
+
+The generated `config.toml` already has a `[voice]` table, so put the two printed keys
+inside it (these are the defaults for the rest):
+
+```toml
+# inside the existing [voice] table
+whisperPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\whisper-cli.exe'
+modelPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\models\ggml-base.bin'
+language = "auto"        # or "en", "fr", ...
+rmsFloor = 0.01          # audio below this RMS is room tone, not speech
+silenceMs = 900          # silence that closes an utterance
+maxUtteranceMs = 15000   # the longest single utterance
+```
+
+Every utterance is one short 16 kHz WAV in the data dir, deleted immediately after the local
+run; no audio is retained beyond it. With both paths empty, a meeting still joins and shows
+the face — it is simply deaf, and says so when someone speaks.
+
 ### Message colours
 
 Signal has no coloured text, so state is carried by circles. The language:
@@ -253,6 +288,7 @@ Scripts:
 | `scripts/setup.ps1` | ensure Java 25, install signal-cli, write `%APPDATA%\SignalConnector\config.toml`, print next steps |
 | `scripts/ensure-java.ps1` | verify/install Microsoft OpenJDK 25 via winget |
 | `scripts/install-signal-cli.ps1` | download latest signal-cli into `%LOCALAPPDATA%\SignalConnector\signal-cli`, print `signal-cli.bat` |
+| `scripts/install-whisper.ps1` | download whisper.cpp and a multilingual base model into `%LOCALAPPDATA%\SignalConnector\whisper`, print the `[voice]` paths |
 | `scripts/start-opencode.ps1` | start `opencode serve` on `127.0.0.1:4096` if not already up |
 | `scripts/link-device.ps1` | run `npm run link` (device QR) |
 | `scripts/run.ps1` | run the daemon (`npm run dev`) |

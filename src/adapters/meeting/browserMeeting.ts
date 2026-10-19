@@ -21,6 +21,7 @@ import type {
   MeetingPort,
 } from "../../core/ports.js";
 import type { Logger } from "../../logging/logger.js";
+import type { RoomAudioFrame } from "../voice/pcm.js";
 import { resolveCommand } from "../spawnCommand.js";
 import {
   ADMISSION_EXPRESSION,
@@ -29,6 +30,7 @@ import {
   JOIN_CLICK_EXPRESSION,
   LIVENESS_EXPRESSION,
   setStateExpression,
+  TAKE_PCM_EXPRESSION,
 } from "./avatarScript.js";
 import { attachToPage, CdpClient, waitForDevToolsPort, type AttachedPage } from "./cdp.js";
 import { findBrowser, type BrowserLookup } from "./chromeFinder.js";
@@ -93,6 +95,22 @@ export interface BrowserMeetingOptions {
   pollMs?: number;
   /** How long to wait for the browser to exit after asking it to close. */
   leaveTimeoutMs?: number;
+  /**
+   * Where the room's audio goes once the avatar is in. The bytes ride the CDP
+   * channel this adapter already owns; no transport is added for them.
+   */
+  onAudio?: (frame: RoomAudioFrame) => void;
+  /** How often to drain the page's audio pump while in the room. */
+  audioPollMs?: number;
+}
+
+/** Read one drained audio frame, tolerating a page that answered with nothing. */
+export function audioFrameFrom(value: unknown): RoomAudioFrame | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const frame = value as { pcm?: unknown; rms?: unknown };
+  if (typeof frame.pcm !== "string" || frame.pcm.length === 0) return undefined;
+  const rms = typeof frame.rms === "number" && Number.isFinite(frame.rms) ? frame.rms : 0;
+  return { pcm: frame.pcm, rms };
 }
 
 interface Session {
@@ -101,6 +119,8 @@ interface Session {
   client?: CdpClient;
   page?: AttachedPage;
   timer?: NodeJS.Timeout;
+  /** Drains the page's audio pump while the avatar is in the room. */
+  audioTimer?: NodeJS.Timeout;
   leaving: boolean;
   /** False until join() has attached and is ready to report states. */
   ready: boolean;
@@ -149,6 +169,7 @@ export class BrowserMeeting implements MeetingPort {
   private readonly admissionTimeoutMs: number;
   private readonly pollMs: number;
   private readonly leaveTimeoutMs: number;
+  private readonly audioPollMs: number;
   private session: Session | undefined;
 
   constructor(options: BrowserMeetingOptions) {
@@ -157,6 +178,7 @@ export class BrowserMeeting implements MeetingPort {
     this.admissionTimeoutMs = options.admissionTimeoutMs ?? 90_000;
     this.pollMs = options.pollMs ?? 1_000;
     this.leaveTimeoutMs = options.leaveTimeoutMs ?? 5_000;
+    this.audioPollMs = options.audioPollMs ?? 250;
   }
 
   async available(): Promise<MeetingAvailability> {
@@ -322,6 +344,7 @@ export class BrowserMeeting implements MeetingPort {
           // the pre-join preview, so it must not latch the meeting as in-room.
           session.inRoom = true;
           await this.paint(session, "in-room");
+          this.startAudio(session);
           session.input.onState({ state: "in-room" });
         } else if (step.kind === "failed") {
           this.options.logger.warn("meeting: nobody admitted the avatar", {
@@ -415,6 +438,7 @@ export class BrowserMeeting implements MeetingPort {
       clearInterval(session.timer);
       session.timer = undefined;
     }
+    this.stopAudio(session);
     this.session = undefined;
     if (session.leaving) return;
     session.leaving = true;
@@ -439,6 +463,37 @@ export class BrowserMeeting implements MeetingPort {
     session.leaving = true;
     session.input.onState({ state, detail });
     await this.shutdown(session, false);
+  }
+
+  /**
+   * Drain the page's audio pump on a short interval while the avatar is in the
+   * room. The frames ride the CDP channel this adapter already owns; nothing
+   * new is opened. The pump always runs, so the page's buffer cannot grow while
+   * no listener is attached.
+   */
+  private startAudio(session: Session): void {
+    if (session.audioTimer) return;
+    session.audioTimer = setInterval(() => {
+      void this.drainAudio(session);
+    }, this.audioPollMs);
+  }
+
+  private async drainAudio(session: Session): Promise<void> {
+    if (this.session !== session || session.leaving || !session.inRoom) return;
+    const page = session.page;
+    if (!page) return;
+    try {
+      const frame = audioFrameFrom(await page.evaluate<unknown>(TAKE_PCM_EXPRESSION));
+      if (frame) this.options.onAudio?.(frame);
+    } catch {
+      // A navigating page has no execution context for a moment; retry next drain.
+    }
+  }
+
+  private stopAudio(session: Session): void {
+    if (!session.audioTimer) return;
+    clearInterval(session.audioTimer);
+    session.audioTimer = undefined;
   }
 
   private async paint(session: Session, state: "joining" | "in-room" | "failed"): Promise<void> {
@@ -466,6 +521,7 @@ export class BrowserMeeting implements MeetingPort {
       clearInterval(session.timer);
       session.timer = undefined;
     }
+    this.stopAudio(session);
 
     if (askBrowser && session.client) {
       try {

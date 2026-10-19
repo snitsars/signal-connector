@@ -49,6 +49,33 @@ export const ConfigSchema = z.object({
       port: z.number().int().default(8790),
     })
     .default({ host: "127.0.0.1", port: 8790 }),
+  /**
+   * Hearing the room (spine AD-1: core sees text and levels only). The tool and
+   * model are fetched by `scripts/install-whisper.ps1`; nothing is spoken.
+   */
+  voice: z
+    .object({
+      /** The fetched whisper.cpp binary. Empty disables transcription. */
+      whisperPath: z.string().default(""),
+      /** The multilingual model file the binary loads. */
+      modelPath: z.string().default(""),
+      /** Spoken language; "auto" lets the model decide. */
+      language: z.string().default("auto"),
+      /** RMS below which audio counts as room tone, not speech (0..1). */
+      rmsFloor: z.number().default(0.01),
+      /** Silence after speech that closes an utterance, in milliseconds. */
+      silenceMs: z.number().int().default(900),
+      /** The longest single utterance, so a stuck room cannot grow without end. */
+      maxUtteranceMs: z.number().int().default(15_000),
+    })
+    .default({
+      whisperPath: "",
+      modelPath: "",
+      language: "auto",
+      rmsFloor: 0.01,
+      silenceMs: 900,
+      maxUtteranceMs: 15_000,
+    }),
   projects: z
     .array(
       z.object({

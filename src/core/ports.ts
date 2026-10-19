@@ -146,6 +146,46 @@ export interface MeetingPort {
   stop(): Promise<void>;
 }
 
+export type VoiceAvailability = { available: true } | { available: false; reason: string };
+
+/** One thing the room said, already gated by energy and transcribed locally. */
+export interface Utterance {
+  /** What was heard, as text. A prompt like any other — never a command. */
+  text: string;
+  /** How long the audio lasted, in milliseconds. */
+  durationMs: number;
+}
+
+export interface StartListeningInput {
+  projectId: string;
+  projectName: string;
+  /** A transcript that passed the energy gate; core offers it to the session. */
+  onUtterance: (utterance: Utterance) => void;
+  /** The room audio's current RMS, 0..1. */
+  onLevel?: (level: number) => void;
+  /** A failure the operator must hear: no transcriber, a failed run. */
+  onFailure?: (reason: string) => void;
+}
+
+/** One handle that can stop listening for the meeting. */
+export interface VoiceHandle {
+  stop(): Promise<void>;
+}
+
+/**
+ * Hears a room and turns speech into text for a project's session. Core passes
+ * ids and names only: no PCM, browser or model type crosses this boundary
+ * (spine AD-1), so a transcript can only ever become a prompt.
+ */
+export interface VoicePort {
+  /** Can this machine listen at all (a transcriber is configured)? */
+  available(): Promise<VoiceAvailability>;
+  /** Begin hearing the room. Resolves once the pump is running. */
+  start(input: StartListeningInput): Promise<VoiceHandle>;
+  /** Shutdown: stop listening without reporting. */
+  stop(): Promise<void>;
+}
+
 export interface AgentPort {
   start(): Promise<void>;
   stop(): Promise<void>;

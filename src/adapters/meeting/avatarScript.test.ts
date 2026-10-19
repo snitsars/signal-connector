@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { base64ToInt16 } from "../voice/pcm.js";
 import {
   ADMISSION_EXPRESSION,
   AVATAR_GLOBAL,
@@ -8,6 +9,7 @@ import {
   JOIN_CLICK_EXPRESSION,
   LIVENESS_EXPRESSION,
   setStateExpression,
+  TAKE_PCM_EXPRESSION,
 } from "./avatarScript.js";
 
 describe("buildAvatarScript", () => {
@@ -233,5 +235,226 @@ describe("ADMISSION_EXPRESSION", () => {
       querySelectorAll: () => [],
     };
     expect(run(page)).toBe("unknown");
+  });
+});
+
+/** A canvas just real enough for the face's one draw call. */
+function canvasStub() {
+  return {
+    width: 0,
+    height: 0,
+    style: { cssText: "" },
+    setAttribute: () => undefined,
+    getContext: () => ({
+      fillStyle: "",
+      strokeStyle: "",
+      lineWidth: 0,
+      lineCap: "",
+      fillRect() {},
+      beginPath() {},
+      arc() {},
+      fill() {},
+      moveTo() {},
+      lineTo() {},
+      stroke() {},
+    }),
+  };
+}
+
+interface FakeProcessor {
+  onaudioprocess: ((event: unknown) => void) | null;
+  connect: () => void;
+}
+
+interface FakeSource {
+  connected: number;
+  disconnected: number;
+  connect: () => void;
+  disconnect: () => void;
+}
+
+/** An audio track that a test can end, as a browser's remote track can. */
+function fakeAudioTrack() {
+  const handlers: Record<string, (() => void)[]> = {};
+  return {
+    kind: "audio",
+    addEventListener: (type: string, fn: () => void) => {
+      (handlers[type] ||= []).push(fn);
+    },
+    end: () => {
+      for (const fn of handlers["ended"] ?? []) fn();
+    },
+  };
+}
+
+/**
+ * A page with a stub RTCPeerConnection and a fake Web Audio graph, so the
+ * injected script's audio hook can be driven without a browser.
+ */
+function hearingPage() {
+  const processors: FakeProcessor[] = [];
+  const sources: FakeSource[] = [];
+  class FakeAudioContext {
+    sampleRate = 48_000;
+    destination = {};
+    createMediaStreamSource() {
+      const source: FakeSource = {
+        connected: 0,
+        disconnected: 0,
+        connect: () => {
+          source.connected += 1;
+        },
+        disconnect: () => {
+          source.disconnected += 1;
+        },
+      };
+      sources.push(source);
+      return source;
+    }
+    createScriptProcessor() {
+      const processor: FakeProcessor = { onaudioprocess: null, connect: () => undefined };
+      processors.push(processor);
+      return processor;
+    }
+    createGain() {
+      return { gain: { value: 1 }, connect: () => undefined };
+    }
+    createMediaStreamDestination() {
+      return { stream: { getAudioTracks: () => [] } };
+    }
+  }
+  class FakePeerConnection {
+    private readonly listeners: Record<string, ((event: unknown) => void)[]> = {};
+    addEventListener(type: string, fn: (event: unknown) => void) {
+      (this.listeners[type] ||= []).push(fn);
+    }
+    dispatch(type: string, event: unknown) {
+      for (const fn of this.listeners[type] ?? []) fn(event);
+    }
+  }
+  const document = {
+    createElement: canvasStub,
+    body: { appendChild: () => undefined },
+  };
+  const navigator = { mediaDevices: { getUserMedia: async () => ({}) } };
+  const window: Record<string, unknown> = {
+    AudioContext: FakeAudioContext,
+    RTCPeerConnection: FakePeerConnection,
+    MediaStream: class {
+      constructor(readonly tracks: unknown[]) {}
+    },
+  };
+  new Function("window", "document", "navigator", buildAvatarScript())(
+    window,
+    document,
+    navigator,
+  );
+  return { window, processors, sources, FakePeerConnection };
+}
+
+describe("the room's audio hook", () => {
+  it("copies a remote track, downsamples to 16 kHz and exposes a pump", () => {
+    const { window, processors } = hearingPage();
+    const avatar = window[AVATAR_GLOBAL] as {
+      takePcm(): { pcm: string; rms: number; active: boolean };
+      hearing(): { active: boolean; level: number };
+    };
+    // Nothing has been heard yet.
+    expect(avatar.takePcm()).toEqual({ pcm: "", rms: 0, active: false });
+    expect(avatar.hearing().active).toBe(false);
+
+    const pc = new (window.RTCPeerConnection as new () => {
+      dispatch(type: string, event: unknown): void;
+    })();
+    pc.dispatch("track", { track: { kind: "audio", readyState: "live" }, streams: [] });
+    expect(processors).toHaveLength(1);
+    expect(avatar.hearing().active).toBe(true);
+
+    // 4096 frames at 48 kHz is 1365 samples at 16 kHz.
+    const input = new Float32Array(4096).fill(0.5);
+    processors[0]!.onaudioprocess!({ inputBuffer: { getChannelData: () => input } });
+
+    const frame = avatar.takePcm();
+    expect(frame.active).toBe(true);
+    expect(frame.rms).toBeCloseTo(0.5, 3);
+    const samples = base64ToInt16(frame.pcm);
+    expect(samples.length).toBe(1365);
+    expect(samples[0]).toBe(Math.round(0.5 * 32767));
+
+    // Draining resets the pump: the same audio is not sent twice.
+    expect(avatar.takePcm().pcm).toBe("");
+    expect(avatar.hearing().level).toBeCloseTo(0.5, 3);
+  });
+
+  it("feeds every audio track into one processor and re-attaches after a track ends", () => {
+    const { window, processors, sources } = hearingPage();
+    const pc = new (window.RTCPeerConnection as new () => {
+      dispatch(type: string, event: unknown): void;
+    })();
+
+    // A video track is not audio and is left alone.
+    pc.dispatch("track", { track: { kind: "video" }, streams: [] });
+    expect(sources).toHaveLength(0);
+
+    const first = fakeAudioTrack();
+    const second = fakeAudioTrack();
+    pc.dispatch("track", { track: first, streams: [] });
+    pc.dispatch("track", { track: second, streams: [] });
+    // One shared processor, but both remote tracks are captured.
+    expect(processors).toHaveLength(1);
+    expect(sources).toHaveLength(2);
+    expect(sources.every((source) => source.connected === 1)).toBe(true);
+
+    // A track that ends frees its slot, so its replacement is heard too.
+    first.end();
+    expect(sources[0]!.disconnected).toBe(1);
+    const third = fakeAudioTrack();
+    pc.dispatch("track", { track: third, streams: [] });
+    expect(sources).toHaveLength(3);
+    expect(sources[2]!.connected).toBe(1);
+    expect(processors).toHaveLength(1);
+  });
+
+  it("clips samples outside the Int16 range instead of wrapping", () => {
+    const { window, processors } = hearingPage();
+    const pc = new (window.RTCPeerConnection as new () => {
+      dispatch(type: string, event: unknown): void;
+    })();
+    pc.dispatch("track", { track: { kind: "audio" }, streams: [] });
+    processors[0]!.onaudioprocess!({
+      inputBuffer: { getChannelData: () => new Float32Array(480).fill(3) },
+    });
+    const avatar = window[AVATAR_GLOBAL] as { takePcm(): { pcm: string } };
+    const samples = base64ToInt16(avatar.takePcm().pcm);
+    expect([...samples]).toEqual(new Array(samples.length).fill(32767));
+  });
+});
+
+describe("TAKE_PCM_EXPRESSION", () => {
+  const run = (window: unknown) =>
+    (new Function("window", `return ${TAKE_PCM_EXPRESSION};`) as (w: unknown) => {
+      pcm: string;
+      rms: number;
+      active: boolean;
+    })(window);
+
+  it("returns an empty frame when there is no avatar", () => {
+    expect(run({})).toEqual({ pcm: "", rms: 0, active: false });
+  });
+
+  it("hands back whatever the page's pump collected", () => {
+    const frame = { pcm: "AAA=", rms: 0.2, active: true };
+    expect(run({ [AVATAR_GLOBAL]: { takePcm: () => frame } })).toEqual(frame);
+  });
+
+  it("survives a pump that throws", () => {
+    const window = {
+      [AVATAR_GLOBAL]: {
+        takePcm: () => {
+          throw new Error("no audio context");
+        },
+      },
+    };
+    expect(run(window)).toEqual({ pcm: "", rms: 0, active: false });
   });
 });

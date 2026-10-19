@@ -13,6 +13,7 @@ import { ProjectLaunchers } from "./adapters/launcher/registry.js";
 import { BrowserMeeting } from "./adapters/meeting/browserMeeting.js";
 import { SignalCliDaemon } from "./adapters/signal/daemon.js";
 import { SignalCliClient } from "./adapters/signal/signalCliClient.js";
+import { BrowserVoice } from "./adapters/voice/browserVoice.js";
 import { BridgeHub } from "./bridge/hub.js";
 import { startBridgeServer } from "./bridge/server.js";
 import { dataDir, loadConfig } from "./config/config.js";
@@ -110,6 +111,13 @@ async function main(): Promise<void> {
   // Secrets are resolved lazily by adapters that need them; keep the store ready.
   void secrets;
 
+  const voice = new BrowserVoice({
+    config: config.voice,
+    logger,
+    // The only audio ever written: one temp WAV per utterance, deleted at once.
+    workDir: path.join(dir, "voice"),
+  });
+
   const app = new CoreApp({
     store,
     signal,
@@ -122,7 +130,10 @@ async function main(): Promise<void> {
       // the operator's, and safe to delete at any time.
       profileDir: path.join(dir, "meeting-profile"),
       logger,
+      // The room's audio rides the CDP channel the meeting already owns.
+      onAudio: (frame) => voice.push(frame),
     }),
+    voice,
   });
   await app.start();
 
@@ -141,6 +152,7 @@ async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     logger.info("shutting down");
     await app.stop();
+    await voice.stop();
     await daemon?.stop();
     bridge.close();
     store.close();

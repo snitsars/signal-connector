@@ -27,6 +27,9 @@ import type {
   MeetingStateEvent,
   QuoteRef,
   SignalPort,
+  Utterance,
+  VoiceHandle,
+  VoicePort,
 } from "./ports.js";
 import { renderStyled } from "./format.js";
 import { decidePaste, PROVIDER_HOSTS, type PasteRefusal } from "./gate.js";
@@ -51,6 +54,8 @@ export interface CoreDeps {
   launcher?: LauncherPort;
   /** Optional: joins a meeting room as the project's avatar. */
   meeting?: MeetingPort;
+  /** Optional: hears a room's speech and turns it into text for a project. */
+  voice?: VoicePort;
   /**
    * Optional: the one bounded reachability probe before a meeting is claimed.
    * Injectable so tests prove the gate without a network.
@@ -93,6 +98,8 @@ interface ActiveMeeting {
   /** The join attempt; resolves once the adapter has the browser up. */
   joining?: Promise<MeetingHandle>;
   handle?: MeetingHandle;
+  /** While the room is heard: the handle that stops listening. */
+  voice?: VoiceHandle;
   /** A terminal path already ran; later states must not repeat it. */
   finished: boolean;
   /** `/meet stop` is under way; adapter state events must not race it. */
@@ -109,6 +116,7 @@ export class CoreApp {
   private readonly logger: Logger;
   private readonly launcher: LauncherPort | undefined;
   private readonly meetingPort: MeetingPort | undefined;
+  private readonly voicePort: VoicePort | undefined;
   private readonly now: () => number;
   /** One bounded reachability probe; the only I/O between gate and claim. */
   private readonly probeRoom: (link: URL) => Promise<boolean>;
@@ -130,6 +138,7 @@ export class CoreApp {
     this.logger = deps.logger;
     this.launcher = deps.launcher;
     this.meetingPort = deps.meeting;
+    this.voicePort = deps.voice;
     this.now = deps.now ?? (() => Date.now());
     this.probeRoom = deps.probeRoom ?? ((link) => this.fetchRoom(link));
   }
@@ -784,6 +793,9 @@ export class CoreApp {
     }
 
     if (event.state === "in-room") {
+      // The avatar is admitted: start hearing the room. A repeated in-room event
+      // (the face recovering) must not start a second pump.
+      await this.startListening(active);
       if (event.detail === "face not publishing") {
         if (!active.faceWarned) {
           active.faceWarned = true;
@@ -815,6 +827,87 @@ export class CoreApp {
     return `${MARK.ok} **Meeting** · in the room as \`${active.projectName}\`${unverified}\n${taskLine}`;
   }
 
+  /**
+   * Begin hearing the room once the avatar is admitted. The transcript is only
+   * ever a prompt: the port hands back text and levels, and runTask sets the
+   * project explicitly because there is no incoming message to take it from.
+   */
+  private async startListening(active: ActiveMeeting): Promise<void> {
+    if (active.voice || active.finished || !this.voicePort) return;
+    try {
+      // Listening can start even when the transcriber is not configured: the
+      // pump still gates and counts, and the adapter names the reason on the
+      // first utterance rather than pretending nothing was said.
+      const availability = await this.voicePort.available();
+      if (!availability.available) {
+        this.logger.warn("voice: transcription is not configured", {
+          project: active.projectName,
+          reason: availability.reason,
+        });
+      }
+      active.voice = await this.voicePort.start({
+        projectId: active.projectId,
+        projectName: active.projectName,
+        onUtterance: (utterance) => {
+          this.enqueue(() => this.onHeard(active, utterance));
+        },
+        onLevel: () => undefined,
+        onFailure: (reason) => {
+          this.enqueue(() => this.onVoiceFailure(active, reason));
+        },
+      });
+      this.logger.info("voice: listening to the room", { project: active.projectName });
+    } catch (err: unknown) {
+      this.logger.warn("voice: could not start listening", {
+        project: active.projectName,
+        error: String(err),
+      });
+      await this.sendProject(
+        active.projectId,
+        `${MARK.attention} **Voice** · could not start listening — ${String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * A transcript the energy gate let through. It is posted in the project's
+   * group before anything runs, then handed to runTask as a prompt — the same
+   * session, status message and summary a typed task uses. Nothing here parses
+   * the words, so a spoken "approve" or "/stop" is just text.
+   */
+  private async onHeard(active: ActiveMeeting, utterance: Utterance): Promise<void> {
+    if (active.finished) return;
+    const project = this.store.getProject(active.projectId);
+    if (!project) return;
+    const text = utterance.text.trim();
+    if (!text) return;
+    // A voice task has no incoming Signal message to derive the project from, so
+    // the project is set here, explicitly.
+    this.currentProjectId = active.projectId;
+    const own = this.store.getChannel(active.projectId);
+    if (own) this.conversation = own.channelId;
+    await this.sendProject(active.projectId, `${MARK.info} heard: ${text}`);
+    await this.runTask(project, text);
+  }
+
+  /** A failure the operator must hear: no transcriber, a failed run. */
+  private async onVoiceFailure(active: ActiveMeeting, reason: string): Promise<void> {
+    if (active.finished) return;
+    await this.sendProject(active.projectId, `${MARK.attention} **Voice** · ${reason}`);
+  }
+
+  /** Stop hearing the room; called on every terminal path. */
+  private async stopListening(active: ActiveMeeting): Promise<void> {
+    const handle = active.voice;
+    active.voice = undefined;
+    if (!handle) return;
+    try {
+      await handle.stop();
+    } catch (err: unknown) {
+      this.logger.warn("voice: stopping failed", { error: String(err) });
+    }
+  }
+
   private async editMeetingMessage(active: ActiveMeeting, markup: string): Promise<void> {
     const { text, styles } = renderStyled(markup);
     try {
@@ -838,6 +931,9 @@ export class CoreApp {
   ): Promise<void> {
     if (active.finished) return;
     active.finished = true;
+    // Terminal means deaf too: the pump is closed before the row and the group
+    // are settled, so no orphan polling outlives the meeting.
+    await this.stopListening(active);
     const closedAt = this.now();
     this.store.closeMeeting(active.projectId, outcome, closedAt);
     if (this.activeMeeting === active) this.activeMeeting = undefined;

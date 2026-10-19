@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { FakeAgent } from "../adapters/fakes/fakeAgent.js";
 import { FakeMeeting } from "../adapters/fakes/fakeMeeting.js";
 import { FakeSignal } from "../adapters/fakes/fakeSignal.js";
+import { FakeVoice } from "../adapters/fakes/fakeVoice.js";
 import { ConfigSchema } from "../config/config.js";
-import type { LauncherPort, MeetingPort } from "./ports.js";
+import type { LauncherPort, MeetingPort, VoicePort } from "./ports.js";
 import { nullLogger, type Logger } from "../logging/logger.js";
 import { openStore, type Store } from "../store/store.js";
 import { CoreApp } from "./app.js";
@@ -21,6 +22,7 @@ function makeApp(
   meeting?: MeetingPort,
   probeRoom?: (link: URL) => Promise<boolean>,
   logger?: Logger,
+  voice?: VoicePort,
 ) {
   const store: Store = openStore(":memory:");
   storeRef = store;
@@ -41,6 +43,7 @@ function makeApp(
     ...(launcher ? { launcher } : {}),
     ...(meeting ? { meeting } : {}),
     ...(probeRoom ? { probeRoom } : {}),
+    ...(voice ? { voice } : {}),
   });
   return { store, signal, agent, app };
 }
@@ -1484,6 +1487,187 @@ describe("meetings", () => {
     await tick();
     await tick();
     expect(meeting.joins.at(-1)?.link).toBe(LINK);
+    await ctx.app.stop();
+  });
+});
+
+describe("voice in the meeting", () => {
+  const LINK = "https://meet.jit.si/room-abc";
+  /** Pinned to a session, so "the session in the store" is a fact, not a guess. */
+  const PROJECTS = [
+    {
+      name: "demo",
+      path: "/tmp/demo",
+      session: "ses_pinned",
+      meet: { allow: [{ id: "+1000", label: "+1000" }], providers: ["meet.jit.si"] },
+    },
+  ];
+  const reachable = async (): Promise<boolean> => true;
+  let meeting: FakeMeeting;
+  let voice: FakeVoice;
+  let ctx: ReturnType<typeof makeApp>;
+
+  /** A started app whose demo project is open and whose avatar is in the room. */
+  async function inRoom(): Promise<void> {
+    meeting = new FakeMeeting();
+    voice = new FakeVoice();
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable, undefined, voice);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    meeting.admit();
+    await tick();
+    await tick();
+  }
+
+  it("starts listening when the avatar is in the room", async () => {
+    await inRoom();
+    expect(voice.started).toEqual([{ projectId: "demo", projectName: "demo" }]);
+    await ctx.app.stop();
+  });
+
+  it("posts a transcript and runs it in the session stored for the project", async () => {
+    await inRoom();
+    // The session a typed task reaches, for comparison.
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "a typed question"));
+    await tick();
+    expect(ctx.agent.started.at(-1)?.sessionId).toBe("ses_pinned");
+
+    voice.utterance("what does the parser do");
+    await tick();
+    await tick();
+
+    const heard = ctx.signal.sent.find((m) =>
+      m.text.includes("heard: what does the parser do"),
+    );
+    expect(heard?.channelId).toBe("group-1-demo");
+
+    const task = ctx.agent.started.at(-1)!;
+    expect(task.prompt).toBe("what does the parser do");
+    expect(task.sessionId).toBe("ses_pinned");
+    expect(ctx.store.getSession("demo")).toBe("ses_pinned");
+
+    // The group learns what was heard before the task's status line appears.
+    const heardIndex = ctx.signal.sent.indexOf(heard!);
+    const statusIndex = ctx.signal.sent.findIndex(
+      (m, i) => i > heardIndex && m.text.includes("Task "),
+    );
+    expect(statusIndex).toBeGreaterThan(heardIndex);
+    await ctx.app.stop();
+  });
+
+  it("treats a spoken approval as text and decides no permission", async () => {
+    await inRoom();
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const taskId = ctx.agent.started[0]!.taskId;
+    ctx.agent.emit({
+      type: "permission",
+      taskId,
+      at: Date.now(),
+      permission: { id: "p1", taskId, tool: "bash", description: "run ls", safe: false },
+    });
+    await tick();
+    expect(ctx.agent.decisions).toHaveLength(0);
+
+    voice.utterance("approve");
+    await tick();
+    await tick();
+
+    // No permission is answered and no task stopped: the words are only a prompt.
+    expect(ctx.agent.decisions).toHaveLength(0);
+    expect(ctx.agent.aborted).toHaveLength(0);
+    expect(ctx.agent.started.at(-1)?.prompt).toBe("approve");
+    expect(ctx.signal.sent.some((m) => m.text.includes("heard: approve"))).toBe(true);
+    await ctx.app.stop();
+  });
+
+  it("treats a spoken /stop as a prompt and aborts nothing", async () => {
+    await inRoom();
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const before = ctx.agent.started.length;
+
+    voice.utterance("/stop");
+    await tick();
+    await tick();
+
+    expect(ctx.agent.aborted).toHaveLength(0);
+    expect(ctx.agent.started.length).toBe(before + 1);
+    expect(ctx.agent.started.at(-1)?.prompt).toBe("/stop");
+    await ctx.app.stop();
+  });
+
+  it("counts a dropped utterance, posts its reason and keeps the meeting", async () => {
+    await inRoom();
+    const tasks = ctx.agent.started.length;
+
+    voice.drop("the transcriber timed out");
+    await tick();
+    await tick();
+
+    expect(voice.drops).toBe(1);
+    const notice = ctx.signal.sent.at(-1)!;
+    expect(notice.channelId).toBe("group-1-demo");
+    expect(notice.text).toContain("the transcriber timed out");
+    expect(ctx.agent.started).toHaveLength(tasks);
+    expect(ctx.store.getOpenMeeting()).not.toBeUndefined();
+    expect(ctx.signal.sent.some((m) => m.text.includes("Meeting ended"))).toBe(false);
+    await ctx.app.stop();
+  });
+
+  it("stops listening on /meet stop", async () => {
+    await inRoom();
+    expect(voice.started).toHaveLength(1);
+
+    ctx.signal.emitMessage(incoming("/meet stop"));
+    await tick();
+    await tick();
+
+    expect(voice.stops).toEqual(["demo"]);
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    await ctx.app.stop();
+  });
+
+  it("stops listening when the room ends by itself", async () => {
+    await inRoom();
+    meeting.die("the call ended");
+    await tick();
+    await tick();
+
+    expect(voice.stops).toEqual(["demo"]);
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    await ctx.app.stop();
+  });
+
+  it("stops listening when the connector shuts down", async () => {
+    await inRoom();
+    await ctx.app.stop();
+    expect(voice.stops).toEqual(["demo"]);
+    expect(voice.started).toHaveLength(1);
+  });
+
+  it("never starts listening when the join fails", async () => {
+    meeting = new FakeMeeting();
+    voice = new FakeVoice();
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable, undefined, voice);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    meeting.failJoin = true;
+
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+
+    expect(voice.started).toHaveLength(0);
+    expect(voice.stops).toHaveLength(0);
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    const ended = ctx.signal.sent.find((m) => m.text.includes("Meeting ended"));
+    expect(ended?.text).toContain("could not start the avatar browser");
     await ctx.app.stop();
   });
 });

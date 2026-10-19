@@ -130,6 +130,132 @@ export function buildAvatarScript(): string {
     return state.audio;
   };
 
+  // --- hearing the room ------------------------------------------------------
+  // The room plays the operator's voice through a peer connection. That audio
+  // exists only in this page, so a hook on RTCPeerConnection copies every remote
+  // audio track into one ScriptProcessorNode, averages it down to 16 kHz mono and
+  // parks the PCM on this global. The connector drains it over the CDP channel it
+  // already owns and does the transcription locally.
+  const hearing = { active: false, ctx: null, processor: null, sources: [], chunks: [], level: 0 };
+
+  // One shared processor: several remote tracks must not be heard twice, and a
+  // track that ends must free its slot for its replacement.
+  const ensureHearing = () => {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return null;
+    if (!hearing.ctx) hearing.ctx = new Ctx();
+    const ctx = hearing.ctx;
+    if (!hearing.processor) {
+      const processor = ctx.createScriptProcessor(4096, 1, 1);
+      const rate = ctx.sampleRate || 48000;
+      processor.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0);
+        const outLength = Math.floor((input.length * 16000) / rate);
+        if (outLength <= 0) return;
+        const out = new Int16Array(outLength);
+        const step = rate / 16000;
+        let sum = 0;
+        for (let i = 0; i < outLength; i++) {
+          // Average each group (not just the first sample), so decimation does
+          // not alias speech into a different pitch.
+          const start = Math.floor(i * step);
+          const end = Math.min(input.length, Math.floor((i + 1) * step));
+          let acc = 0;
+          for (let j = start; j < end; j++) acc += input[j] || 0;
+          const raw = acc / Math.max(1, end - start);
+          const sample = raw > 1 ? 1 : raw < -1 ? -1 : raw;
+          out[i] = Math.round(sample * 32767);
+          sum += sample * sample;
+        }
+        hearing.level = Math.sqrt(sum / outLength);
+        hearing.chunks.push(out);
+        // A silent stretch must not grow the buffer without bound; the connector
+        // drains far more often than this ever fills.
+        if (hearing.chunks.length > 400) hearing.chunks.shift();
+      };
+      // A ScriptProcessorNode only runs while connected; a zero-gain node keeps
+      // it silent on the way to the destination.
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      processor.connect(gain);
+      gain.connect(ctx.destination);
+      hearing.processor = processor;
+      hearing.active = true;
+    }
+    return hearing.processor;
+  };
+
+  const attachRoomAudio = (track) => {
+    if (!track || track.kind !== "audio") return;
+    try {
+      // MediaStream is reached through window for the same reason as every other
+      // browser global here: the script also runs outside a page in tests.
+      const MS = window.MediaStream;
+      if (typeof MS !== "function") return;
+      const processor = ensureHearing();
+      if (!processor) return;
+      const source = hearing.ctx.createMediaStreamSource(new MS([track]));
+      source.connect(processor);
+      hearing.sources.push({ track: track, source: source });
+      // A track can end and be replaced (a reconnect or a device change): detach
+      // it so the room is not heard twice, and let a new track attach again.
+      const detach = () => {
+        try { source.disconnect(); } catch (err) { /* already gone */ }
+        hearing.sources = hearing.sources.filter((entry) => entry.track !== track);
+      };
+      if (typeof track.addEventListener === "function") {
+        track.addEventListener("ended", detach);
+      }
+    } catch (err) { /* no audio: the group hears no transcript rather than a crash */ }
+  };
+
+  // Patch the constructor before the room builds one, so its own peer
+  // connection is the hooked one.
+  const hookPeerConnection = () => {
+    const Original = window.RTCPeerConnection;
+    if (typeof Original !== "function" || Original.__signalConnectorHooked) return;
+    const Hooked = function (...args) {
+      const pc = new Original(...args);
+      pc.addEventListener("track", (event) => {
+        if (event && event.track) attachRoomAudio(event.track);
+        else if (event && event.streams && event.streams[0] && event.streams[0].getAudioTracks) {
+          event.streams[0].getAudioTracks().forEach(attachRoomAudio);
+        }
+      });
+      return pc;
+    };
+    Hooked.prototype = Original.prototype;
+    Hooked.__signalConnectorHooked = true;
+    try { window.RTCPeerConnection = Hooked; } catch (err) { return; }
+    const Prefixed = window.webkitRTCPeerConnection;
+    if (typeof Prefixed === "function" && !Prefixed.__signalConnectorHooked) {
+      try { window.webkitRTCPeerConnection = Hooked; } catch (err) { /* best effort */ }
+    }
+  };
+
+  // Drain the audio collected since the last call. "pcm" is base64 Int16 at
+  // 16 kHz; an empty frame means nothing was heard.
+  const takePcm = () => {
+    const chunks = hearing.chunks;
+    hearing.chunks = [];
+    const level = hearing.level;
+    if (chunks.length === 0) return { pcm: "", rms: 0, active: hearing.active };
+    let total = 0;
+    for (let i = 0; i < chunks.length; i++) total += chunks[i].length;
+    const merged = new Int16Array(total);
+    let offset = 0;
+    for (let i = 0; i < chunks.length; i++) {
+      merged.set(chunks[i], offset);
+      offset += chunks[i].length;
+    }
+    const bytes = new Uint8Array(merged.buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return { pcm: btoa(binary), rms: level, active: hearing.active };
+  };
+
   const media = navigator.mediaDevices;
   if (media && typeof media.getUserMedia === "function") {
     const original = media.getUserMedia.bind(media);
@@ -163,8 +289,11 @@ export function buildAvatarScript(): string {
       publishing: state.live && !!state.track && state.track.readyState === "live",
       state: state.name,
     }),
+    takePcm: takePcm,
+    hearing: () => ({ active: hearing.active, level: hearing.level }),
   };
 
+  hookPeerConnection();
   draw();
 })();`;
 }
@@ -189,6 +318,17 @@ export const LIVENESS_EXPRESSION = `(() => {
   }
   const now = avatar.liveness();
   return { present: true, publishing: !!now.publishing, state: String(now.state || "") };
+})()`;
+
+/**
+ * Drains the room audio the injected script collected. The result is the frame
+ * the voice pipeline consumes: base64 Int16 at 16 kHz and its RMS. Nothing is
+ * returned when the page has no avatar or has heard nothing.
+ */
+export const TAKE_PCM_EXPRESSION = `(() => {
+  const avatar = window.${AVATAR_GLOBAL};
+  if (!avatar || typeof avatar.takePcm !== "function") return { pcm: "", rms: 0, active: false };
+  try { return avatar.takePcm(); } catch (err) { return { pcm: "", rms: 0, active: false }; }
 })()`;
 
 /**
