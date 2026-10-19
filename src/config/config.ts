@@ -70,6 +70,8 @@ export const ConfigSchema = z.object({
       piperPath: z.string().default(""),
       /** The Piper `.onnx` speaker model; its `.onnx.json` sits beside it. */
       piperVoicePath: z.string().default(""),
+    /** Piper's speaking pace; 1 is the model's own, higher is slower. */
+    piperLengthScale: z.number().positive().default(1.0),
       /** Spoken language; "auto" lets the model decide. */
       language: z.string().default("auto"),
     /** Said once when the avatar is in the room and listening. Empty says nothing. */

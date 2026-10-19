@@ -476,6 +476,22 @@ describe("BrowserVoice speech", () => {
     expect(fs.readdirSync(v.workDir)).toEqual([]);
   });
 
+  it("strips Markdown before the voice reads it", async () => {
+    const v = speaking({ ...BASE });
+    dirs.push(v.workDir);
+    const handle = await v.start();
+    await v.voice.whenIdle();
+
+    await handle.speak("**Done** · `src/app.ts`\n\n- один\n- два");
+
+    const spoken = v.synthesizer.texts.at(-1)!;
+    expect(spoken).not.toContain("**");
+    expect(spoken).not.toContain("`");
+    expect(spoken).toContain("Done");
+    expect(spoken).toContain("src/app.ts");
+    expect(spoken).toContain("один");
+  });
+
   it("stops mid-sentence when the operator speaks and drops the queued answer", async () => {
     const v = speaking();
     dirs.push(v.workDir);

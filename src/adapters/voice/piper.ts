@@ -93,6 +93,8 @@ export interface PiperOptions {
   command: string;
   /** The `.onnx` speaker model; its `.onnx.json` sits beside it. */
   voicePath: string;
+  /** Piper's pace; 1 is the model's own, higher speaks slower. */
+  lengthScale?: number;
   /** Where the temp WAV is written; the caller deletes it. */
   workDir: string;
   /** How long one synthesis may run before it is killed. */
@@ -120,7 +122,12 @@ export class PiperSynthesizer implements Synthesizer {
 
   /** The argv one run uses; exposed so a test can prove it. */
   argumentsFor(wavPath: string): string[] {
-    return ["--model", this.options.voicePath, "--output_file", wavPath];
+    const args = ["--model", this.options.voicePath, "--output_file", wavPath];
+    const scale = this.options.lengthScale;
+    if (typeof scale === "number" && scale > 0 && Math.abs(scale - 1) > 0.01) {
+      args.push("--length_scale", String(scale));
+    }
+    return args;
   }
 
   async synthesize(text: string): Promise<SynthesizeResult> {

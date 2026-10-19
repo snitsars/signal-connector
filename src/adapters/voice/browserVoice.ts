@@ -60,6 +60,29 @@ export function capSpeech(text: string, maxChars: number): string {
   return `${trimmed}…`;
 }
 
+/**
+ * What an answer sounds like when it is read out. Group messages are Markdown:
+ * asterisks, backticks, links, bullets and emoji are noise in the room, and a
+ * synthesiser reading them is what makes a decent voice sound robotic.
+ */
+export function speakable(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s+/gm, "")
+    .replace(/^\s{0,3}>\s?/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/(\*|_){1,2}([^*_\n]+)\1{1,2}/g, "$2")
+    .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{200D}]/gu, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\n/g, " ")
+    .trim();
+}
+
 /** What the page says about the speech it is playing. */
 export interface SpeechState {
   speaking: boolean;
@@ -164,6 +187,7 @@ export class BrowserVoice implements VoicePort {
         ? new PiperSynthesizer({
             command: options.config.piperPath,
             voicePath: options.config.piperVoicePath,
+            lengthScale: options.config.piperLengthScale,
             workDir: options.workDir,
             // A 600-character answer is roughly a minute of speech, and Piper
             // runs slower than real time; the old 20 s cap timed out on real
@@ -371,7 +395,7 @@ export class BrowserVoice implements VoicePort {
 
   /** Speak an answer; a cap keeps a long report out of the room's ears. */
   private speak(input: StartListeningInput, text: string): Promise<void> {
-    const capped = capSpeech(text, this.config.maxSpeechChars);
+    const capped = capSpeech(speakable(text), this.config.maxSpeechChars);
     if (!capped) return Promise.resolve();
     return this.enqueueSpeech(input, async () => {
       const result = await this.synthesizer.synthesize(capped);

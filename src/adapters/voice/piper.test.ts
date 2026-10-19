@@ -55,6 +55,23 @@ describe("PiperSynthesizer", () => {
     expect(runs[0]!.input).toBe("Привіт. Як справи?\n");
   });
 
+  it("adds a slower pace only when it differs from the model's own", () => {
+    const slower = new PiperSynthesizer({
+      command: "piper.exe",
+      voicePath: "C:\\voices\\v.onnx",
+      lengthScale: 1.2,
+      workDir: ".",
+    });
+    expect(slower.argumentsFor("C:\\temp\\x.wav")).toContain("--length_scale");
+
+    const plain = new PiperSynthesizer({
+      command: "piper.exe",
+      voicePath: "C:\\voices\\v.onnx",
+      workDir: ".",
+    });
+    expect(plain.argumentsFor("C:\\temp\\x.wav")).not.toContain("--length_scale");
+  });
+
   it("is unconfigured without both the binary and the voice", () => {
     const { voice } = synthesizer(async () => ({ code: 0, stderr: "", timedOut: false }), {
       voicePath: "",
