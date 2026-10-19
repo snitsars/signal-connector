@@ -86,6 +86,27 @@ export const ConfigSchema = z.object({
       rate: 0,
       maxSpeechChars: 600,
     }),
+  /**
+   * The meeting's own budgets (spine AD-1: core sees telemetry only). Presence
+   * is advisory, the silence budget turns repeated silence into one alarm, and
+   * the activity window closes a room that stopped reporting at all.
+   */
+  meeting: z
+    .object({
+      /** How long the room may be inaudible before the deaf alarm fires. */
+      silenceBudgetMs: z.number().int().positive().default(5_000),
+      /** How long an admitted meeting may go without telemetry before it is closed. */
+      activityWindowMs: z.number().int().positive().default(30_000),
+      /** How often the adapter reads presence and audio from the page. */
+      telemetryMs: z.number().int().positive().default(5_000),
+    })
+    .refine((value) => value.telemetryMs < value.activityWindowMs, {
+      // A cadence at or past the window means the watchdog can fire before the
+      // adapter has had a chance to report, closing a healthy meeting.
+      message: "meeting.telemetryMs must be less than meeting.activityWindowMs",
+      path: ["telemetryMs"],
+    })
+    .default({ silenceBudgetMs: 5_000, activityWindowMs: 30_000, telemetryMs: 5_000 }),
   projects: z
     .array(
       z.object({

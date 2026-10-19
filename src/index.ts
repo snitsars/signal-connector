@@ -127,6 +127,8 @@ async function main(): Promise<void> {
     logger,
     // The room's audio rides the CDP channel the meeting already owns.
     onAudio: (frame) => voice?.push(frame),
+    // Presence and audio readings are plain telemetry; core owns the budgets.
+    telemetryMs: config.meeting.telemetryMs,
   });
   voice = new BrowserVoice({
     config: config.voice,

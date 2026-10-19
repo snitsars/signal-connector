@@ -23,6 +23,7 @@ function makeApp(
   probeRoom?: (link: URL) => Promise<boolean>,
   logger?: Logger,
   voice?: VoicePort,
+  options: { now?: () => number; watchdogMs?: number } = {},
 ) {
   const store: Store = openStore(":memory:");
   storeRef = store;
@@ -44,6 +45,8 @@ function makeApp(
     ...(meeting ? { meeting } : {}),
     ...(probeRoom ? { probeRoom } : {}),
     ...(voice ? { voice } : {}),
+    ...(options.now ? { now: options.now } : {}),
+    ...(options.watchdogMs !== undefined ? { watchdogMs: options.watchdogMs } : {}),
   });
   return { store, signal, agent, app };
 }
@@ -2007,6 +2010,245 @@ describe("voice in the meeting", () => {
 
     expect(ctx.store.getTask(second)?.state).toBe("done");
     voice.releaseSpeech();
+    await ctx.app.stop();
+  });
+});
+
+describe("meeting telemetry, presence and the watchdog", () => {
+  const LINK = "https://meet.jit.si/room-abc";
+  const PROJECTS = [
+    {
+      name: "demo",
+      path: "/tmp/demo",
+      session: "ses_pinned",
+      meet: { allow: [{ id: "+1000", label: "+1000" }], providers: ["meet.jit.si"] },
+    },
+  ];
+  const reachable = async (): Promise<boolean> => true;
+  let meeting: FakeMeeting;
+  let voice: FakeVoice;
+  let clock: number;
+  let ctx: ReturnType<typeof makeApp>;
+
+  /** An admitted meeting on a clock the test moves by hand. */
+  async function admitted(options: { watchdogMs?: number } = {}): Promise<void> {
+    clock = 1_000_000;
+    meeting = new FakeMeeting();
+    voice = new FakeVoice();
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable, undefined, voice, {
+      now: () => clock,
+      ...(options.watchdogMs !== undefined ? { watchdogMs: options.watchdogMs } : {}),
+    });
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    meeting.admit();
+    await tick();
+    await tick();
+    // The first reading arrives one telemetry cadence after admission.
+    clock += 5_000;
+  }
+
+  const meetingMessage = () => ctx.signal.sent.find((m) => m.text.includes("Meeting ·"));
+  const alarms = () => ctx.signal.sent.filter((m) => m.text.includes("gone silent"));
+
+  it("posts one deaf alarm per silence spell and re-arms when audio returns", async () => {
+    await admitted();
+    // A room silent from admission alarms at the first budget, not the second.
+    meeting.telemetry({ presence: "someone", humans: 1, level: 0, audioEpoch: 1 });
+    await tick();
+    await tick();
+
+    expect(alarms()).toHaveLength(1);
+    expect(alarms()[0]!.text).toContain("gone silent");
+    expect(alarms()[0]!.channelId).toBe("group-1-demo");
+    expect(ctx.store.getValue("health:meeting")).toContain("silent");
+
+    // A mute/unmute track change restarts the clock but does not repost the spell.
+    clock += 5_001;
+    meeting.telemetry({ level: 0, audioEpoch: 2 });
+    await tick();
+    expect(alarms()).toHaveLength(1);
+
+    // The same silence does not nag again.
+    clock += 5_001;
+    meeting.telemetry({ level: 0, audioEpoch: 2 });
+    await tick();
+    expect(alarms()).toHaveLength(1);
+
+    // Audible audio clears the alarm and its health signal.
+    meeting.telemetry({ level: 0.4, audioEpoch: 2 });
+    await tick();
+    expect(ctx.store.getValue("health:meeting")).toBe("");
+
+    // A later silence is a new spell.
+    clock += 5_001;
+    meeting.telemetry({ level: 0, audioEpoch: 2 });
+    await tick();
+    await tick();
+    expect(alarms()).toHaveLength(2);
+    expect(ctx.store.getValue("health:meeting")).toContain("silent");
+    await ctx.app.stop();
+  });
+
+  it("clears the health signal on a clean ending", async () => {
+    await admitted();
+    meeting.telemetry({ level: 0, audioEpoch: 1 });
+    await tick();
+    await tick();
+    expect(ctx.store.getValue("health:meeting")).toContain("silent");
+
+    ctx.signal.emitMessage(incoming("/meet stop"));
+    await tick();
+    await tick();
+
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(ctx.store.getValue("health:meeting")).toBe("");
+    await ctx.app.stop();
+  });
+
+  it("alarms on silence even when nobody is visibly present", async () => {
+    await admitted();
+    meeting.telemetry({ presence: "nobody", humans: 0, level: 0, audioEpoch: 1 });
+    await tick();
+    clock += 5_001;
+    meeting.telemetry({ presence: "nobody", humans: 0, level: 0, audioEpoch: 1 });
+    await tick();
+    await tick();
+    expect(alarms()).toHaveLength(1);
+    await ctx.app.stop();
+  });
+
+  it("names someone, nobody or unknown in the meeting message, with no identity", async () => {
+    await admitted();
+
+    meeting.telemetry({ presence: "someone", humans: 1, level: 0.3, audioEpoch: 1 });
+    await tick();
+    expect(meetingMessage()?.text).toContain("someone here");
+
+    meeting.telemetry({ presence: "nobody", humans: 0, level: 0.3, audioEpoch: 1 });
+    await tick();
+    expect(meetingMessage()?.text).toContain("nobody visible");
+
+    meeting.telemetry({ presence: "unknown", level: 0.3, audioEpoch: 1 });
+    await tick();
+    expect(meetingMessage()?.text).toContain("presence unknown");
+
+    // No identity ever reaches the group, and unknown never makes it listen-only.
+    expect(ctx.signal.sent.every((m) => !m.text.includes("+1000"))).toBe(true);
+    expect(ctx.signal.sent.some((m) => m.text.includes("listen-only"))).toBe(false);
+    await ctx.app.stop();
+  });
+
+  it("goes listen-only once for a second human and never speaks again", async () => {
+    await admitted();
+    // humans counts the people beside the avatar: two is the operator plus one.
+    meeting.telemetry({ presence: "someone", humans: 2, level: 0.3, audioEpoch: 1 });
+    await tick();
+    await tick();
+
+    expect(ctx.signal.sent.filter((m) => m.text.includes("listen-only"))).toHaveLength(1);
+    expect(voice.stoppedSpeaking).toBe(1);
+
+    // Hearing continues: the transcript and the answer both reach the group.
+    voice.utterance("what happens now");
+    await tick();
+    await tick();
+    const taskId = ctx.agent.started.at(-1)!.taskId;
+    ctx.agent.emit({ type: "idle", taskId, at: Date.now(), summary: "the answer in the group" });
+    await tick();
+    await tick();
+    expect(ctx.signal.sent.some((m) => m.text.includes("heard: what happens now"))).toBe(true);
+    expect(ctx.signal.sent.some((m) => m.text.includes("the answer in the group"))).toBe(true);
+    expect(voice.spoken).toHaveLength(0);
+
+    // A permission announcement is silent too.
+    ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
+    await tick();
+    const secondTask = ctx.agent.started.at(-1)!.taskId;
+    ctx.agent.emit({
+      type: "permission",
+      taskId: secondTask,
+      at: Date.now(),
+      permission: { id: "p1", taskId: secondTask, tool: "bash", description: "run ls", safe: false },
+    });
+    await tick();
+    await tick();
+    expect(ctx.signal.sent.some((m) => m.text.includes("Approval needed"))).toBe(true);
+    expect(voice.spoken).toHaveLength(0);
+
+    // A count that drops does not re-enable speech.
+    meeting.telemetry({ presence: "someone", humans: 1, level: 0.3, audioEpoch: 1 });
+    await tick();
+    voice.utterance("a later question");
+    await tick();
+    await tick();
+    const thirdTask = ctx.agent.started.at(-1)!.taskId;
+    ctx.agent.emit({ type: "idle", taskId: thirdTask, at: Date.now(), summary: "still silent" });
+    await tick();
+    await tick();
+    expect(voice.spoken).toHaveLength(0);
+    expect(ctx.signal.sent.filter((m) => m.text.includes("listen-only"))).toHaveLength(1);
+    await ctx.app.stop();
+  });
+
+  it("closes an admitted meeting that stops reporting, with one outcome and health", async () => {
+    await admitted({ watchdogMs: 5 });
+
+    // A reading inside the window keeps the meeting open.
+    clock += 10_000;
+    meeting.telemetry({ presence: "someone", humans: 1, level: 0.3, audioEpoch: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await tick();
+    expect(ctx.store.getOpenMeeting()).not.toBeUndefined();
+
+    // Nothing arrives past the activity window: the watchdog closes it once.
+    clock += 30_001;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await tick();
+    await tick();
+
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(meeting.leaves).toEqual(["demo"]);
+    expect(ctx.store.getValue("health:meeting")).toContain("no telemetry");
+    const summaries = ctx.signal.sent.filter((m) => m.text.includes("Meeting ended"));
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]!.text).toContain("stopped reporting activity");
+    expect(summaries[0]!.text.startsWith("🔴")).toBe(true);
+
+    // A late adapter report cannot produce a second outcome.
+    meeting.telemetry({ level: 0.5, audioEpoch: 2 });
+    meeting.die("the call ended late");
+    await tick();
+    expect(ctx.signal.sent.filter((m) => m.text.includes("Meeting ended"))).toHaveLength(1);
+    await ctx.app.stop();
+  });
+
+  it("leaves a meeting that has not been admitted alone", async () => {
+    clock = 1_000_000;
+    meeting = new FakeMeeting();
+    voice = new FakeVoice();
+    ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable, undefined, voice, {
+      now: () => clock,
+      watchdogMs: 5,
+    });
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+
+    // The admission budget, not the activity window, owns an unadmitted room.
+    clock += 60_000;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await tick();
+
+    expect(ctx.store.getOpenMeeting()).not.toBeUndefined();
+    expect(ctx.signal.sent.some((m) => m.text.includes("Meeting ended"))).toBe(false);
     await ctx.app.stop();
   });
 });

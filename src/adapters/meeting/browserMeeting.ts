@@ -19,16 +19,20 @@ import type {
   MeetingHandle,
   MeetingLeaveResult,
   MeetingPort,
+  MeetingPresence,
+  MeetingTelemetry,
 } from "../../core/ports.js";
 import type { Logger } from "../../logging/logger.js";
 import type { RoomAudioFrame } from "../voice/pcm.js";
 import { resolveCommand } from "../spawnCommand.js";
 import {
   ADMISSION_EXPRESSION,
+  AUDIO_STATE_EXPRESSION,
   buildAvatarScript,
   guestNameScript,
   JOIN_CLICK_EXPRESSION,
   LIVENESS_EXPRESSION,
+  PRESENCE_EXPRESSION,
   setStateExpression,
   SPEECH_STATE_EXPRESSION,
   speakExpression,
@@ -105,6 +109,11 @@ export interface BrowserMeetingOptions {
   onAudio?: (frame: RoomAudioFrame) => void;
   /** How often to drain the page's audio pump while in the room. */
   audioPollMs?: number;
+  /**
+   * How often the page is asked for presence and audio telemetry. Core owns the
+   * budgets; this only sets the cadence of the plain reports.
+   */
+  telemetryMs?: number;
   /** How long a wedged page gets to go quiet before the browser is closed. */
   stopTimeoutMs?: number;
 }
@@ -116,6 +125,28 @@ export function audioFrameFrom(value: unknown): RoomAudioFrame | undefined {
   if (typeof frame.pcm !== "string" || frame.pcm.length === 0) return undefined;
   const rms = typeof frame.rms === "number" && Number.isFinite(frame.rms) ? frame.rms : 0;
   return { pcm: frame.pcm, rms };
+}
+
+/** Keep presence to the three words core knows; anything else is unknown. */
+export function presenceFrom(value: unknown): MeetingPresence {
+  return value === "someone" || value === "nobody" ? value : "unknown";
+}
+
+/** The page's audio reading, with absent or malformed fields made harmless. */
+export function audioStateFrom(value: unknown): {
+  active: boolean;
+  level: number;
+  epoch: number;
+} {
+  if (!value || typeof value !== "object") return { active: false, level: 0, epoch: 0 };
+  const state = value as { active?: unknown; level?: unknown; epoch?: unknown };
+  return {
+    active: !!state.active,
+    level:
+      typeof state.level === "number" && Number.isFinite(state.level) ? state.level : 0,
+    epoch:
+      typeof state.epoch === "number" && Number.isFinite(state.epoch) ? state.epoch : 0,
+  };
 }
 
 interface Session {
@@ -140,6 +171,8 @@ interface Session {
   /** Consecutive polls that looked like the join lobby again. */
   backInLobby: number;
   admissionDeadline: number;
+  /** When the page was last asked for telemetry (ms since the epoch). */
+  lastTelemetryAt: number;
 }
 
 interface Liveness {
@@ -181,6 +214,7 @@ export class BrowserMeeting implements MeetingPort {
   private readonly pollMs: number;
   private readonly leaveTimeoutMs: number;
   private readonly audioPollMs: number;
+  private readonly telemetryMs: number;
   private readonly stopTimeoutMs: number;
   private session: Session | undefined;
   /** Bumped on every page navigation: a clip made for the old document is stale. */
@@ -193,6 +227,7 @@ export class BrowserMeeting implements MeetingPort {
     this.pollMs = options.pollMs ?? 1_000;
     this.leaveTimeoutMs = options.leaveTimeoutMs ?? 5_000;
     this.audioPollMs = options.audioPollMs ?? 250;
+    this.telemetryMs = options.telemetryMs ?? 5_000;
     this.stopTimeoutMs = options.stopTimeoutMs ?? 1_000;
   }
 
@@ -234,6 +269,7 @@ export class BrowserMeeting implements MeetingPort {
       joinWarned: false,
       backInLobby: 0,
       admissionDeadline: Date.now() + this.admissionTimeoutMs,
+      lastTelemetryAt: 0,
     };
     this.session = session;
     child.on("exit", () => {
@@ -371,6 +407,9 @@ export class BrowserMeeting implements MeetingPort {
           // Only the page naming the room admits the avatar. Publishing alone is
           // the pre-join preview, so it must not latch the meeting as in-room.
           session.inRoom = true;
+          // Admission is the first telemetry fact: the activity window and the
+          // silence clock both start here, not at the claim.
+          session.lastTelemetryAt = Date.now();
           await this.paint(session, "in-room");
           this.startAudio(session);
           session.input.onState({ state: "in-room" });
@@ -409,10 +448,60 @@ export class BrowserMeeting implements MeetingPort {
         session.faceWarned = false;
         session.input.onState({ state: "in-room" });
       }
+
+      // Telemetry is a plain reading, never a decision: it does not end the
+      // meeting, it only tells core what the page can see and hear.
+      if (Date.now() - session.lastTelemetryAt >= this.telemetryMs) {
+        session.lastTelemetryAt = Date.now();
+        await this.readTelemetry(session, page);
+      }
     } catch {
       // A navigating page has no execution context for a moment. The next poll
       // retries; only a lost target or a dead process is terminal.
     }
+  }
+
+  /**
+   * Ask the page who is here and whether the room's audio is moving. Both reads
+   * are cheap and neither drains the PCM the voice pump needs. A page that
+   * cannot answer contributes "unknown" rather than a guess.
+   */
+  private async readTelemetry(session: Session, page: AttachedPage): Promise<void> {
+    const onTelemetry = session.input.onTelemetry;
+    if (!onTelemetry || this.session !== session || session.leaving || !session.inRoom) return;
+
+    let presence: MeetingPresence = "unknown";
+    let humans: number | undefined;
+    try {
+      const reported = await page.evaluate<{ presence?: unknown; humans?: unknown }>(
+        PRESENCE_EXPRESSION,
+      );
+      presence = presenceFrom(reported?.presence);
+      if (typeof reported?.humans === "number" && Number.isFinite(reported.humans)) {
+        humans = reported.humans;
+      }
+    } catch {
+      // A navigating page has no execution context; presence stays unknown.
+    }
+
+    let audio: { active: boolean; level: number; epoch: number };
+    try {
+      audio = audioStateFrom(await page.evaluate<unknown>(AUDIO_STATE_EXPRESSION));
+    } catch {
+      // A failed read cannot speak for the track. Reporting a made-up epoch 0
+      // would look like a track change and restart the silence clock, so skip
+      // this report and let the next poll answer.
+      return;
+    }
+
+    onTelemetry({
+      presence,
+      ...(humans !== undefined ? { humans } : {}),
+      audioLive: audio.active,
+      level: audio.level,
+      audioEpoch: audio.epoch,
+      at: Date.now(),
+    });
   }
 
   /**

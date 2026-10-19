@@ -9,6 +9,7 @@ import type {
   MeetingLeaveResult,
   MeetingPort,
   MeetingStateEvent,
+  MeetingTelemetry,
 } from "../../core/ports.js";
 
 export interface FakeJoin {
@@ -33,6 +34,7 @@ export class FakeMeeting implements MeetingPort {
   /** Make leave() report a browser that survived the kill. */
   surviveLeave = false;
   private handler: ((event: MeetingStateEvent) => void) | undefined;
+  private telemetryHandler: ((telemetry: MeetingTelemetry) => void) | undefined;
   private open = false;
 
   async available(): Promise<MeetingAvailability> {
@@ -53,6 +55,7 @@ export class FakeMeeting implements MeetingPort {
       link: input.link,
     });
     this.handler = input.onState;
+    this.telemetryHandler = input.onTelemetry;
     this.open = true;
     if (this.skipAdmission) {
       queueMicrotask(() => {
@@ -64,6 +67,7 @@ export class FakeMeeting implements MeetingPort {
         this.leaves.push(input.projectId);
         this.open = false;
         this.handler = undefined;
+        this.telemetryHandler = undefined;
         return this.surviveLeave
           ? { closed: false, detail: "the browser did not exit; the room may still be open" }
           : { closed: true };
@@ -74,11 +78,27 @@ export class FakeMeeting implements MeetingPort {
   async stop(): Promise<void> {
     this.open = false;
     this.handler = undefined;
+    this.telemetryHandler = undefined;
   }
 
   /** Test helper: the room admitted the avatar. */
   admit(): void {
     this.handler?.({ state: "in-room" });
+  }
+
+  /**
+   * Test helper: a plain telemetry reading from the page. Defaults describe a
+   * quiet room with nobody enumerable; a test overrides only what it means.
+   */
+  telemetry(overrides: Partial<MeetingTelemetry> = {}): void {
+    this.telemetryHandler?.({
+      presence: "unknown",
+      audioLive: true,
+      level: 0,
+      audioEpoch: 0,
+      at: Date.now(),
+      ...overrides,
+    });
   }
 
   /** Test helper: the lobby offered no join control, so it needs a hand. */

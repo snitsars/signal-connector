@@ -4,6 +4,45 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ConfigSchema, loadConfig } from "./config.js";
 
+describe("meeting budgets", () => {
+  it("defaults the silence, activity and telemetry budgets", () => {
+    const config = ConfigSchema.parse({});
+    expect(config.meeting).toEqual({
+      silenceBudgetMs: 5_000,
+      activityWindowMs: 30_000,
+      telemetryMs: 5_000,
+    });
+  });
+
+  it("keeps configured budgets", () => {
+    const config = ConfigSchema.parse({
+      meeting: { silenceBudgetMs: 2_000, activityWindowMs: 60_000, telemetryMs: 1_000 },
+    });
+    expect(config.meeting).toEqual({
+      silenceBudgetMs: 2_000,
+      activityWindowMs: 60_000,
+      telemetryMs: 1_000,
+    });
+  });
+
+  it("refuses a telemetry cadence that is not inside the activity window", () => {
+    for (const telemetryMs of [30_000, 60_000]) {
+      const result = ConfigSchema.safeParse({
+        meeting: { telemetryMs, activityWindowMs: 30_000 },
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toContain("less than");
+      }
+    }
+    // Exactly one cadence inside the window is fine.
+    expect(
+      ConfigSchema.safeParse({ meeting: { telemetryMs: 29_999, activityWindowMs: 30_000 } })
+        .success,
+    ).toBe(true);
+  });
+});
+
 describe("meet allow-list config", () => {
   it("leaves a project without meet unconfigured, so a paste fails closed", () => {
     const config = ConfigSchema.parse({ projects: [{ name: "demo", path: "/tmp/demo" }] });

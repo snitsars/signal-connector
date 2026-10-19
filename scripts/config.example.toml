@@ -38,6 +38,14 @@ voiceName = ""               # Windows system voice; "" picks the default
 rate = 0                     # speaking rate, -10..10 (0 is the voice's pace)
 maxSpeechChars = 600         # longest answer spoken aloud; the group keeps it all
 
+# The meeting's own budgets (optional). Presence is advisory and never a gate.
+# The deaf alarm posts once per silence spell; the watchdog closes an admitted
+# meeting that stops reporting. telemetryMs must be less than activityWindowMs.
+[meeting]
+silenceBudgetMs = 5000       # inaudible room audio before one deaf-alarm post
+activityWindowMs = 30000     # no telemetry this long closes the meeting as failed
+telemetryMs = 5000           # how often the page is read; keep below the window
+
 [outbound]
 minIntervalMs = 1500         # minimum spacing between sends
 maxPerMinute = 20            # rolling cap

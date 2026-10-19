@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { nullLogger } from "../../logging/logger.js";
-import { admissionStep, BrowserMeeting, browserArguments } from "./browserMeeting.js";
+import {
+  admissionStep,
+  audioStateFrom,
+  BrowserMeeting,
+  browserArguments,
+  presenceFrom,
+} from "./browserMeeting.js";
 
 describe("browserArguments", () => {
   it("starts on about:blank so the media override exists before the room", () => {
@@ -61,5 +67,29 @@ describe("speaking without a meeting", () => {
     expect(await meeting.speechState()).toEqual({ speaking: false, queued: 0 });
     // Stopping silence is a no-op, not an error.
     await meeting.stopAudio();
+  });
+});
+
+describe("presence and audio readings", () => {
+  it("keeps only the three presence words", () => {
+    expect(presenceFrom("someone")).toBe("someone");
+    expect(presenceFrom("nobody")).toBe("nobody");
+    expect(presenceFrom("unknown")).toBe("unknown");
+    expect(presenceFrom("a name")).toBe("unknown");
+    expect(presenceFrom(undefined)).toBe("unknown");
+  });
+
+  it("makes a malformed audio reading harmless", () => {
+    expect(audioStateFrom(undefined)).toEqual({ active: false, level: 0, epoch: 0 });
+    expect(audioStateFrom({ active: true, level: 0.2, epoch: 3 })).toEqual({
+      active: true,
+      level: 0.2,
+      epoch: 3,
+    });
+    expect(audioStateFrom({ active: 1, level: "loud", epoch: NaN })).toEqual({
+      active: true,
+      level: 0,
+      epoch: 0,
+    });
   });
 });

@@ -111,12 +111,45 @@ export interface MeetingStateEvent {
   verified?: boolean;
 }
 
+/**
+ * Who the page can see in the room. Deliberately weak and never an identity:
+ * it is advisory only, never a block, an approval or a gate input.
+ */
+export type MeetingPresence = "someone" | "nobody" | "unknown";
+
+/**
+ * What the room's page can say about audio and people, as plain telemetry.
+ * The adapter knows whether the track moved; core owns every budget and every
+ * message, so policy stays fake-testable (spine AD-1).
+ */
+export interface MeetingTelemetry {
+  presence: MeetingPresence;
+  /** How many humans the page can enumerate besides the avatar; absent if it cannot. */
+  humans?: number;
+  /** True while the page's audio hook is attached and running. */
+  audioLive: boolean;
+  /** The room audio's current RMS, 0..1. */
+  level: number;
+  /** Changes when the room audio is re-attached or a track is muted or unmuted. */
+  audioEpoch: number;
+  /** When the page produced this reading, epoch milliseconds. */
+  at: number;
+}
+
 export interface JoinMeetingInput {
   projectId: string;
   projectName: string;
   /** The room link. It must never reach a log line, a refusal or a group message. */
   link: string;
   onState: (event: MeetingStateEvent) => void;
+  /**
+   * Periodic telemetry while the avatar is admitted. An adapter that admits the
+   * avatar must report at least once inside the activity window (or a page that
+   * cannot say who is here must still report presence "unknown"), because core's
+   * watchdog closes a meeting that never reports as failed. Omitting the callback
+   * does not make the meeting safe; it makes the watchdog its only ending.
+   */
+  onTelemetry?: (telemetry: MeetingTelemetry) => void;
 }
 
 export interface MeetingLeaveResult {

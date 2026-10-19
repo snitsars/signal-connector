@@ -276,7 +276,7 @@ export function buildAvatarScript(): string {
   // audio track into one ScriptProcessorNode, averages it down to 16 kHz mono and
   // parks the PCM on this global. The connector drains it over the CDP channel it
   // already owns and does the transcription locally.
-  const hearing = { active: false, ctx: null, processor: null, sources: [], chunks: [], level: 0 };
+  const hearing = { ctx: null, processor: null, sources: [], chunks: [], level: 0, peak: 0, epoch: 0 };
 
   // One shared processor: several remote tracks must not be heard twice, and a
   // track that ends must free its slot for its replacement.
@@ -308,6 +308,9 @@ export function buildAvatarScript(): string {
           sum += sample * sample;
         }
         hearing.level = Math.sqrt(sum / outLength);
+        // A level read every few seconds must not miss a short remark between
+        // reads: keep the loudest block until the connector asks.
+        if (hearing.level > hearing.peak) hearing.peak = hearing.level;
         hearing.chunks.push(out);
         // A silent stretch must not grow the buffer without bound; the connector
         // drains far more often than this ever fills.
@@ -320,7 +323,6 @@ export function buildAvatarScript(): string {
       processor.connect(gain);
       gain.connect(ctx.destination);
       hearing.processor = processor;
-      hearing.active = true;
     }
     return hearing.processor;
   };
@@ -337,16 +339,58 @@ export function buildAvatarScript(): string {
       const source = hearing.ctx.createMediaStreamSource(new MS([track]));
       source.connect(processor);
       hearing.sources.push({ track: track, source: source });
+      // A track arriving is a change the connector must see: it resets the
+      // silence clock, because a fresh track is not the same silence as before.
+      hearing.epoch += 1;
       // A track can end and be replaced (a reconnect or a device change): detach
       // it so the room is not heard twice, and let a new track attach again.
       const detach = () => {
         try { source.disconnect(); } catch (err) { /* already gone */ }
         hearing.sources = hearing.sources.filter((entry) => entry.track !== track);
+        hearing.epoch += 1;
       };
+      // A provider mutes the operator's track while they are muted; that is a
+      // change too, not evidence that the room has gone deaf for good.
+      const bumpEpoch = () => { hearing.epoch += 1; };
       if (typeof track.addEventListener === "function") {
         track.addEventListener("ended", detach);
+        track.addEventListener("mute", bumpEpoch);
+        track.addEventListener("unmute", bumpEpoch);
       }
     } catch (err) { /* no audio: the group hears no transcript rather than a crash */ }
+  };
+
+  // --- who is here -----------------------------------------------------------
+  // Presence is deliberately weak. Only the provider's own member list can say
+  // how many humans are in the room; everywhere else the answer is "unknown",
+  // never guessed from audio or from the page's markup. No identity leaves this
+  // page: just a count of the humans besides the avatar.
+  const presence = () => {
+    try {
+      const app = window.APP;
+      const conference = app && app.conference;
+      if (!conference || typeof conference.listMembers !== "function") {
+        return { presence: "unknown" };
+      }
+      // Jitsi documents listMembers() as every participant except the local
+      // user, so the avatar itself is already out of the count.
+      const members = conference.listMembers();
+      if (!Array.isArray(members)) return { presence: "unknown" };
+      let humans = 0;
+      for (let i = 0; i < members.length; i++) {
+        const member = members[i];
+        if (!member) continue;
+        // Hidden participants (recorders, transcribers) are not people in the
+        // room, so they must not make the avatar listen-only.
+        try {
+          if (typeof member.isHidden === "function" && member.isHidden()) continue;
+        } catch (err) { /* an unreadable flag is still a member */ }
+        humans += 1;
+      }
+      return { presence: humans > 0 ? "someone" : "nobody", humans: humans };
+    } catch (err) {
+      return { presence: "unknown" };
+    }
   };
 
   // Patch the constructor before the room builds one, so its own peer
@@ -379,7 +423,8 @@ export function buildAvatarScript(): string {
     const chunks = hearing.chunks;
     hearing.chunks = [];
     const level = hearing.level;
-    if (chunks.length === 0) return { pcm: "", rms: 0, active: hearing.active };
+    const active = hearing.sources.length > 0;
+    if (chunks.length === 0) return { pcm: "", rms: 0, active: active };
     let total = 0;
     for (let i = 0; i < chunks.length; i++) total += chunks[i].length;
     const merged = new Int16Array(total);
@@ -393,7 +438,7 @@ export function buildAvatarScript(): string {
     for (let i = 0; i < bytes.length; i += 0x8000) {
       binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     }
-    return { pcm: btoa(binary), rms: level, active: hearing.active };
+    return { pcm: btoa(binary), rms: level, active: active };
   };
 
   const media = navigator.mediaDevices;
@@ -430,7 +475,19 @@ export function buildAvatarScript(): string {
       state: state.name,
     }),
     takePcm: takePcm,
-    hearing: () => ({ active: hearing.active, level: hearing.level }),
+    hearing: () => {
+      // The peak since the last read, then reset: a short remark between two
+      // telemetry reads must still count as audible room audio. "Active" means
+      // a remote track is still attached, not that a processor once existed.
+      const level = hearing.peak;
+      hearing.peak = 0;
+      return {
+        active: hearing.sources.length > 0,
+        level: level,
+        epoch: hearing.epoch,
+      };
+    },
+    presence: presence,
     speak: speak,
     stopSpeaking: stopSpeaking,
     speech: speechState,
@@ -461,6 +518,45 @@ export const LIVENESS_EXPRESSION = `(() => {
   }
   const now = avatar.liveness();
   return { present: true, publishing: !!now.publishing, state: String(now.state || "") };
+})()`;
+
+/**
+ * Reports whether the room's audio hook is attached and how loud it is, plus
+ * the epoch that changes when a track is attached, ended, muted or unmuted.
+ * Neither this nor the presence probe drains the PCM the voice pump needs.
+ */
+export const AUDIO_STATE_EXPRESSION = `(() => {
+  const avatar = window.${AVATAR_GLOBAL};
+  if (!avatar || typeof avatar.hearing !== "function") {
+    return { present: false, active: false, level: 0, epoch: 0 };
+  }
+  try {
+    const now = avatar.hearing() || {};
+    const level = typeof now.level === "number" && isFinite(now.level) ? now.level : 0;
+    const epoch = typeof now.epoch === "number" && isFinite(now.epoch) ? now.epoch : 0;
+    return { present: true, active: !!now.active, level: level, epoch: epoch };
+  } catch (err) {
+    return { present: false, active: false, level: 0, epoch: 0 };
+  }
+})()`;
+
+/**
+ * Asks the page who it can see. Jitsi answers from its own member list; every
+ * other page is "unknown". No identity is ever returned, only the count of
+ * humans besides the avatar, and only when the provider itself can say it.
+ */
+export const PRESENCE_EXPRESSION = `(() => {
+  const avatar = window.${AVATAR_GLOBAL};
+  if (!avatar || typeof avatar.presence !== "function") return { presence: "unknown" };
+  try {
+    const now = avatar.presence() || {};
+    const presence =
+      now.presence === "someone" || now.presence === "nobody" ? now.presence : "unknown";
+    if (typeof now.humans !== "number" || !isFinite(now.humans)) return { presence: presence };
+    return { presence: presence, humans: now.humans };
+  } catch (err) {
+    return { presence: "unknown" };
+  }
 })()`;
 
 /**

@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import { base64ToInt16 } from "../voice/pcm.js";
 import {
   ADMISSION_EXPRESSION,
+  AUDIO_STATE_EXPRESSION,
   AVATAR_GLOBAL,
   buildAvatarScript,
   FACE_COLOURS,
   guestNameScript,
   JOIN_CLICK_EXPRESSION,
   LIVENESS_EXPRESSION,
+  PRESENCE_EXPRESSION,
   setStateExpression,
   SPEECH_STATE_EXPRESSION,
   speakExpression,
@@ -349,17 +351,20 @@ interface PendingDecode {
   reject: (error: unknown) => void;
 }
 
-/** An audio track that a test can end, as a browser's remote track can. */
+/** An audio track that a test can end, mute or unmute, as a remote track can. */
 function fakeAudioTrack() {
   const handlers: Record<string, (() => void)[]> = {};
+  const fire = (type: string) => {
+    for (const fn of handlers[type] ?? []) fn();
+  };
   return {
     kind: "audio",
     addEventListener: (type: string, fn: () => void) => {
       (handlers[type] ||= []).push(fn);
     },
-    end: () => {
-      for (const fn of handlers["ended"] ?? []) fn();
-    },
+    end: () => fire("ended"),
+    mute: () => fire("mute"),
+    unmute: () => fire("unmute"),
   };
 }
 
@@ -776,5 +781,201 @@ describe("SPEECH_STATE_EXPRESSION", () => {
         },
       }),
     ).toEqual({ speaking: false, queued: 0 });
+  });
+});
+
+interface PresenceReading {
+  presence: string;
+  humans?: number;
+}
+
+describe("presence in the room", () => {
+  const avatarOf = (page: ReturnType<typeof hearingPage>) =>
+    page.window[AVATAR_GLOBAL] as unknown as { presence(): PresenceReading };
+
+  it("counts the humans beside the avatar from Jitsi's member list", () => {
+    const page = hearingPage();
+    expect(avatarOf(page).presence()).toEqual({ presence: "unknown" });
+
+    page.window.APP = {
+      conference: {
+        listMembers: () => [
+          { id: "human-1", displayName: "+1000" },
+        ],
+      },
+    };
+    expect(avatarOf(page).presence()).toEqual({ presence: "someone", humans: 1 });
+  });
+
+  it("ignores hidden participants, who are not people in the room", () => {
+    const page = hearingPage();
+    page.window.APP = {
+      conference: {
+        listMembers: () => [
+          { id: "human-1", displayName: "+1000" },
+          { id: "jibri", isHidden: () => true },
+        ],
+      },
+    };
+    expect(avatarOf(page).presence()).toEqual({ presence: "someone", humans: 1 });
+  });
+
+  it("says nobody when the avatar is the only member", () => {
+    const page = hearingPage();
+    // listMembers() excludes the local user, so an empty list is an empty room.
+    page.window.APP = { conference: { listMembers: () => [] } };
+    expect(avatarOf(page).presence()).toEqual({ presence: "nobody", humans: 0 });
+  });
+
+  it("is unknown when the page cannot enumerate participants", () => {
+    // No provider API at all.
+    const page = hearingPage();
+    expect(avatarOf(page).presence()).toEqual({ presence: "unknown" });
+
+    // A provider API with no conference, or no member list.
+    page.window.APP = {};
+    expect(avatarOf(page).presence()).toEqual({ presence: "unknown" });
+    page.window.APP = { conference: {} };
+    expect(avatarOf(page).presence()).toEqual({ presence: "unknown" });
+    page.window.APP = { conference: { listMembers: () => null } };
+    expect(avatarOf(page).presence()).toEqual({ presence: "unknown" });
+
+    // A member list that throws is still unknown, never guessed.
+    page.window.APP = {
+      conference: {
+        listMembers: () => {
+          throw new Error("conference gone");
+        },
+      },
+    };
+    expect(avatarOf(page).presence()).toEqual({ presence: "unknown" });
+  });
+});
+
+describe("PRESENCE_EXPRESSION", () => {
+  const run = (window: unknown) =>
+    (new Function("window", `return ${PRESENCE_EXPRESSION};`) as (w: unknown) => PresenceReading)(
+      window,
+    );
+
+  it("returns unknown when there is no avatar", () => {
+    expect(run({})).toEqual({ presence: "unknown" });
+  });
+
+  it("returns the presence word and a count, never an identity", () => {
+    const page = hearingPage();
+    page.window.APP = {
+      conference: {
+        listMembers: () => [{ id: "human-1", displayName: "+15550001111" }],
+      },
+    };
+    const reading = run(page.window);
+    expect(reading).toEqual({ presence: "someone", humans: 1 });
+    expect(JSON.stringify(reading)).not.toContain("+15550001111");
+  });
+
+  it("survives a presence reader that throws", () => {
+    expect(
+      run({
+        [AVATAR_GLOBAL]: {
+          presence: () => {
+            throw new Error("gone");
+          },
+        },
+      }),
+    ).toEqual({ presence: "unknown" });
+  });
+});
+
+describe("AUDIO_STATE_EXPRESSION", () => {
+  const run = (window: unknown) =>
+    (new Function("window", `return ${AUDIO_STATE_EXPRESSION};`) as (w: unknown) => {
+      present: boolean;
+      active: boolean;
+      level: number;
+      epoch: number;
+    })(window);
+
+  it("reports nothing when there is no avatar", () => {
+    expect(run({})).toEqual({ present: false, active: false, level: 0, epoch: 0 });
+  });
+
+  it("reports the hook's state without draining the PCM pump", () => {
+    const page = hearingPage();
+    const avatar = page.window[AVATAR_GLOBAL] as {
+      takePcm(): { pcm: string };
+    };
+    const pc = new (page.window.RTCPeerConnection as new () => {
+      dispatch(type: string, event: unknown): void;
+    })();
+    pc.dispatch("track", { track: fakeAudioTrack(), streams: [] });
+    page.processors[0]!.onaudioprocess!({
+      inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.25) },
+    });
+
+    const reading = run(page.window);
+    expect(reading.present).toBe(true);
+    expect(reading.active).toBe(true);
+    expect(reading.level).toBeCloseTo(0.25, 3);
+    expect(reading.epoch).toBe(1);
+
+    // The voice pump still gets the audio: telemetry is a separate read.
+    expect(avatar.takePcm().pcm.length).toBeGreaterThan(0);
+  });
+});
+
+describe("the audio epoch", () => {
+  it("changes when a track attaches, is muted, unmuted or ends", () => {
+    const page = hearingPage();
+    const avatar = page.window[AVATAR_GLOBAL] as { hearing(): { epoch: number } };
+    const pc = new (page.window.RTCPeerConnection as new () => {
+      dispatch(type: string, event: unknown): void;
+    })();
+    expect(avatar.hearing().epoch).toBe(0);
+
+    const track = fakeAudioTrack();
+    pc.dispatch("track", { track, streams: [] });
+    expect(avatar.hearing().epoch).toBe(1);
+
+    track.mute();
+    expect(avatar.hearing().epoch).toBe(2);
+    track.unmute();
+    expect(avatar.hearing().epoch).toBe(3);
+    track.end();
+    expect(avatar.hearing().epoch).toBe(4);
+  });
+});
+
+describe("the audio level between reads", () => {
+  it("reports the peak since the last read, resets it, and tracks attached sources", () => {
+    const page = hearingPage();
+    const avatar = page.window[AVATAR_GLOBAL] as {
+      hearing(): { active: boolean; level: number };
+    };
+    const pc = new (page.window.RTCPeerConnection as new () => {
+      dispatch(type: string, event: unknown): void;
+    })();
+
+    // No remote track yet: a processor that exists is not a live room.
+    expect(avatar.hearing()).toEqual({ active: false, level: 0, epoch: 0 });
+
+    const track = fakeAudioTrack();
+    pc.dispatch("track", { track, streams: [] });
+    expect(avatar.hearing().active).toBe(true);
+
+    // A loud block followed by a quiet one: the loud one must survive the read.
+    page.processors[0]!.onaudioprocess!({
+      inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.5) },
+    });
+    page.processors[0]!.onaudioprocess!({
+      inputBuffer: { getChannelData: () => new Float32Array(4096).fill(0.1) },
+    });
+    expect(avatar.hearing().level).toBeCloseTo(0.5, 3);
+    // Reading the peak clears it, so the next spell starts from silence.
+    expect(avatar.hearing().level).toBe(0);
+
+    // A track that ended is no longer a live room, even though the processor lives.
+    track.end();
+    expect(avatar.hearing().active).toBe(false);
   });
 });

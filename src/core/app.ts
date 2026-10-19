@@ -24,7 +24,9 @@ import type {
   MeetingHandle,
   MeetingLeaveResult,
   MeetingPort,
+  MeetingPresence,
   MeetingStateEvent,
+  MeetingTelemetry,
   QuoteRef,
   SignalPort,
   Utterance,
@@ -62,6 +64,11 @@ export interface CoreDeps {
    */
   probeRoom?: (link: URL) => Promise<boolean>;
   now?: () => number;
+  /**
+   * How often the watchdog checks an admitted meeting for telemetry. Injectable
+   * so a test needs no fake timers; production follows the telemetry cadence.
+   */
+  watchdogMs?: number;
 }
 
 interface PendingApproval {
@@ -118,6 +125,27 @@ interface ActiveMeeting {
   /** `/meet stop` is under way; adapter state events must not race it. */
   stopping: boolean;
   faceWarned: boolean;
+  /** True once the page has positively admitted the avatar. */
+  inRoom: boolean;
+  /** When telemetry last arrived; the activity window is measured from here. */
+  lastTelemetryAt: number;
+  /** When audible audio or a track change last restarted the silence clock. */
+  lastEpochAt: number;
+  /** The page's last audio epoch, so a change can be told from the same track. */
+  audioEpoch: number;
+  /** The deaf alarm is out; it re-arms only when audible audio returns. */
+  deaf: boolean;
+  /** Who the page could see at its last report; advisory, never an identity. */
+  presence: MeetingPresence;
+  /** A second human is here: hearing continues, speaking is over for good. */
+  listenOnly: boolean;
+}
+
+/** How the presence word appears in the meeting message. */
+function presenceText(presence: MeetingPresence): string {
+  if (presence === "someone") return "someone here";
+  if (presence === "nobody") return "nobody visible";
+  return "presence unknown";
 }
 
 
@@ -142,6 +170,9 @@ export class CoreApp {
   private conversation = "self";
   /** Serializes handler dispatch so events are processed in arrival order. */
   private chain: Promise<void> = Promise.resolve();
+  /** Closes an admitted meeting whose telemetry stopped; cleared on stop. */
+  private watchdog: NodeJS.Timeout | undefined;
+  private readonly watchdogMs: number;
 
   constructor(deps: CoreDeps) {
     this.store = deps.store;
@@ -154,6 +185,9 @@ export class CoreApp {
     this.voicePort = deps.voice;
     this.now = deps.now ?? (() => Date.now());
     this.probeRoom = deps.probeRoom ?? ((link) => this.fetchRoom(link));
+    // Never check less often than the telemetry it watches for, and never spin.
+    this.watchdogMs =
+      deps.watchdogMs ?? Math.max(1_000, Math.min(5_000, this.config.meeting.telemetryMs));
   }
 
   /**
@@ -206,10 +240,20 @@ export class CoreApp {
     // good; close it and tell the project's group, which is where it would have
     // said so itself had it ended cleanly.
     await this.reconcileMeetings();
+    // The room can go quiet without saying so; only an admitted meeting is
+    // watched, so the separate admission budget is untouched.
+    this.watchdog = setInterval(() => {
+      this.enqueue(() => this.checkMeetingActivity());
+    }, this.watchdogMs);
+    this.watchdog.unref();
     this.logger.info("core started", { channel: this.controlChannel });
   }
 
   async stop(): Promise<void> {
+    if (this.watchdog) {
+      clearInterval(this.watchdog);
+      this.watchdog = undefined;
+    }
     const active = this.activeMeeting;
     if (active && !active.finished) {
       // Leave the room first, then take the same terminal path as any other
@@ -743,6 +787,13 @@ export class CoreApp {
       finished: false,
       stopping: false,
       faceWarned: false,
+      inRoom: false,
+      lastTelemetryAt: startedAt,
+      lastEpochAt: startedAt,
+      audioEpoch: -1,
+      deaf: false,
+      presence: "unknown",
+      listenOnly: false,
     };
     this.activeMeeting = active;
 
@@ -752,6 +803,9 @@ export class CoreApp {
       link: trimmed,
       onState: (event) => {
         this.enqueue(() => this.onMeetingState(active, event));
+      },
+      onTelemetry: (telemetry) => {
+        this.enqueue(() => this.onTelemetry(active, telemetry));
       },
     });
     active.joining = joining;
@@ -824,6 +878,14 @@ export class CoreApp {
     if (event.state === "in-room") {
       // The avatar is admitted: start hearing the room. A repeated in-room event
       // (the face recovering) must not start a second pump.
+      if (!active.inRoom) {
+        // Admission, not the claim, starts both clocks: a slow lobby must not
+        // count against the silence budget or the activity window.
+        const admittedAt = this.now();
+        active.inRoom = true;
+        active.lastTelemetryAt = admittedAt;
+        active.lastEpochAt = admittedAt;
+      }
       await this.startListening(active);
       if (event.detail === "face not publishing") {
         if (!active.faceWarned) {
@@ -845,7 +907,7 @@ export class CoreApp {
     await this.finishMeeting(active, event.state, outcome, event.state === "failed");
   }
 
-  /** The in-room message carries the project's current task state beside it. */
+  /** The in-room message carries presence and the project's task state. */
   private inRoomText(active: ActiveMeeting, event: MeetingStateEvent): string {
     const unverified = event.verified === false ? " · unverified" : "";
     const task =
@@ -853,7 +915,136 @@ export class CoreApp {
     const taskLine = task
       ? statusLine(task, task.summary)
       : "No task is running. Send one here and the meeting follows it.";
-    return `${MARK.ok} **Meeting** · in the room as \`${active.projectName}\`${unverified}\n${taskLine}`;
+    return `${MARK.ok} **Meeting** · in the room as \`${active.projectName}\`${unverified}\n${presenceText(active.presence)}\n${taskLine}`;
+  }
+
+  /**
+   * A plain reading from the page: who it can see, how loud the room is, and
+   * whether the audio track changed. Core decides what it means — never the
+   * adapter, and never an identity. Nothing here can end the meeting; the
+   * watchdog owns that.
+   */
+  private async onTelemetry(active: ActiveMeeting, telemetry: MeetingTelemetry): Promise<void> {
+    if (active.finished || active.stopping || !active.inRoom) return;
+    const now = this.now();
+    active.lastTelemetryAt = now;
+
+    // Presence is advisory: it changes one word in the message and nothing else.
+    if (active.presence !== telemetry.presence) {
+      active.presence = telemetry.presence;
+      if (!active.faceWarned) {
+        await this.editMeetingMessage(active, this.inRoomText(active, { state: "in-room" }));
+      }
+    }
+
+    await this.enterListenOnly(active, telemetry);
+
+    // Silence: audible audio re-arms the alarm and clears its health signal. A
+    // track change only restarts the clock — it does not re-arm, or mute/unmute
+    // would repost the same silence. The first reading is the baseline.
+    const audible = telemetry.level >= this.config.voice.rmsFloor;
+    const epochChanged =
+      active.audioEpoch !== -1 && telemetry.audioEpoch !== active.audioEpoch;
+    active.audioEpoch = telemetry.audioEpoch;
+    if (audible) {
+      active.lastEpochAt = now;
+      active.deaf = false;
+      this.clearHealth();
+    } else if (epochChanged) {
+      active.lastEpochAt = now;
+    }
+    if (audible || active.deaf) return;
+
+    const budget = this.config.meeting.silenceBudgetMs;
+    if (now - active.lastEpochAt < budget) return;
+    active.deaf = true;
+    const seconds = Math.round(budget / 1000);
+    this.raiseHealth(`the room in ${active.projectName} has been silent for ${seconds} s`);
+    await this.sendProject(
+      active.projectId,
+      `${MARK.attention} **Meeting** · the room has gone silent — no audible audio for ${seconds} s.`,
+    );
+  }
+
+  /**
+   * A second human in the room ends speech for this meeting: the avatar keeps
+   * hearing and posting transcripts, but never talks again. The count is of
+   * humans besides the avatar, so two means the operator plus one more. A count
+   * that later drops does not re-enable speech, and the group hears this once.
+   */
+  private async enterListenOnly(
+    active: ActiveMeeting,
+    telemetry: MeetingTelemetry,
+  ): Promise<void> {
+    if (active.listenOnly) return;
+    if (typeof telemetry.humans !== "number" || telemetry.humans < 2) return;
+    active.listenOnly = true;
+    try {
+      // A clip already playing would otherwise finish into the room after the
+      // decision that the avatar should be silent.
+      await active.voice?.stopSpeaking();
+    } catch (err: unknown) {
+      this.logger.warn("voice: could not stop speech for listen-only", { error: String(err) });
+    }
+    try {
+      await this.sendProject(
+        active.projectId,
+        `${MARK.attention} **Meeting** · listen-only — another person is in the room, so the avatar will not speak again in this meeting.`,
+      );
+    } catch (err: unknown) {
+      // The latch is deliberate and stays: silence is the safe side. But the
+      // group was not told, so the failure must not be quiet.
+      this.raiseHealth(
+        `could not announce listen-only in ${active.projectName}: ${String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * The store's health signal, for whatever watches this machine, plus an error
+   * line. The group post stays the operator's surface; the reason never carries
+   * the link.
+   */
+  private raiseHealth(reason: string): void {
+    this.store.setValue("health:meeting", reason);
+    this.logger.error("meeting: health signal", { reason });
+  }
+
+  /** The problem is over: do not leave a stale reason in the health key. */
+  private clearHealth(): void {
+    if (!this.store.getValue("health:meeting")) return;
+    this.store.setValue("health:meeting", "");
+  }
+
+  /**
+   * The watchdog: an admitted meeting that has stopped reporting is closed like
+   * any other failure — one outcome, the row wiped, a health signal — because a
+   * stored meeting must never linger with no terminal story.
+   */
+  private async checkMeetingActivity(): Promise<void> {
+    const active = this.activeMeeting;
+    if (!active || active.finished || active.stopping || !active.inRoom) return;
+    const windowMs = this.config.meeting.activityWindowMs;
+    if (this.now() - active.lastTelemetryAt <= windowMs) return;
+
+    active.stopping = true;
+    const seconds = Math.round(windowMs / 1000);
+    this.raiseHealth(`no telemetry from ${active.projectName} for ${seconds} s`);
+    this.logger.warn("meeting: no telemetry; closing the meeting", {
+      project: active.projectName,
+    });
+    try {
+      const handle = active.handle ?? (await active.joining?.catch(() => undefined));
+      if (handle) await handle.leave();
+    } catch {
+      // The terminal outcome below is the story; a failed leave is not a second.
+    }
+    await this.finishMeeting(
+      active,
+      "failed",
+      `the room stopped reporting activity for ${seconds} s`,
+      true,
+    );
   }
 
   /**
@@ -973,6 +1164,8 @@ export class CoreApp {
   private speakInMeeting(projectId: string, text: string): void {
     const active = this.activeMeeting;
     if (!active || active.finished || active.projectId !== projectId) return;
+    // A second human made the avatar listen-only: it hears, but never speaks.
+    if (active.listenOnly) return;
     const handle = active.voice;
     if (!handle) return;
     // The adapter owns the one final cap (VoiceHandle.speak); the permission
@@ -993,6 +1186,8 @@ export class CoreApp {
     if (!task.voice) return;
     const active = this.activeMeeting;
     if (!active || active.finished || active.projectId !== task.projectId) return;
+    // An answer is never read into a room where the avatar is listen-only.
+    if (active.listenOnly) return;
     if (this.store.getValue(`voiceMeeting:${task.id}`) !== String(active.startedAt)) return;
     const handle = active.voice;
     if (!handle) return;
@@ -1034,6 +1229,8 @@ export class CoreApp {
     const closedAt = this.now();
     this.store.closeMeeting(active.projectId, outcome, closedAt);
     if (this.activeMeeting === active) this.activeMeeting = undefined;
+    // A clean ending resolves the meeting's health; a failed one keeps its reason.
+    if (!problem) this.clearHealth();
 
     const mark = problem ? MARK.attention : MARK.ok;
     await this.editMeetingMessage(active, `${mark} **Meeting** · ${outcome}`);
