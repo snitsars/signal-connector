@@ -17,21 +17,25 @@
   %LOCALAPPDATA%\SignalConnector\whisper.
 
 .PARAMETER Model
-  Which multilingual model to fetch: tiny, base or small. Defaults to base.
+  Which multilingual model to fetch: tiny, base, small, medium or
+  large-v3-turbo. Defaults to base. The larger two are quantised (q5_0) so they
+  stay near half a gigabyte; large-v3-turbo is the most accurate per second.
 #>
 [CmdletBinding()]
 param(
     [string]$Destination = '',
-    [ValidateSet('tiny', 'base', 'small')]
+    [ValidateSet('tiny', 'base', 'small', 'medium', 'large-v3-turbo')]
     [string]$Model = 'base'
 )
 
 $ErrorActionPreference = 'Stop'
 
 $ModelFiles = @{
-    tiny  = 'ggml-tiny.bin'
-    base  = 'ggml-base.bin'
-    small = 'ggml-small.bin'
+    tiny            = 'ggml-tiny.bin'
+    base            = 'ggml-base.bin'
+    small           = 'ggml-small.bin'
+    medium          = 'ggml-medium-q5_0.bin'
+    'large-v3-turbo' = 'ggml-large-v3-turbo-q5_0.bin'
 }
 $ModelFile = $ModelFiles[$Model]
 $VadFile = 'ggml-silero-v6.2.0.bin'

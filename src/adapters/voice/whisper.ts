@@ -164,7 +164,12 @@ export class WhisperTranscriber implements Transcriber {
     // A VAD model is the strongest guard against transcription over room tone:
     // whisper skips the segments Silero says are not speech.
     const vad = this.options.vadPath?.trim();
-    if (vad) args.push("--vad", "-vm", vad);
+    if (vad) {
+      args.push("--vad", "-vm", vad);
+      // The default speech pad trims the first and last syllables, which turned
+      // "Скільки тестів у проєкцію?" into "кількі тестів". 200 ms keeps them.
+      args.push("--vad-speech-pad-ms", "200");
+    }
     return args;
   }
 

@@ -103,6 +103,8 @@ describe("WhisperTranscriber", () => {
       "--vad",
       "-vm",
       "C:\\whisper\\ggml-silero-v6.2.0.bin",
+      "--vad-speech-pad-ms",
+      "200",
     ]);
   });
 
