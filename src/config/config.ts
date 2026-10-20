@@ -120,6 +120,8 @@ export const ConfigSchema = z.object({
       bargeInMs: z.number().int().positive().default(900),
     /** Let the operator's voice stop the avatar mid-sentence. */
     bargeIn: z.boolean().default(true),
+    /** Run a spoken question in a fresh session so a long task cannot block it. */
+    freshSession: z.boolean().default(true),
       /** The Windows system voice to speak with; empty picks the default. */
       voiceName: z.string().default(""),
       /** SAPI speaking rate, -10..10; 0 is the voice's own pace. */

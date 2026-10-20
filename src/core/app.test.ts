@@ -1588,7 +1588,9 @@ describe("voice in the meeting", () => {
 
     const task = ctx.agent.started.at(-1)!;
     expect(task.prompt.startsWith("what does the parser do")).toBe(true);
-    expect(task.sessionId).toBe("ses_pinned");
+    // A spoken question gets its own session so a busy pinned one cannot block
+    // the room; the project's pinned session is left untouched.
+    expect(task.sessionId).not.toBe("ses_pinned");
     expect(ctx.store.getSession("demo")).toBe("ses_pinned");
 
     // The group learns what was heard before the task's status line appears.

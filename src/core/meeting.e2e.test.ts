@@ -446,7 +446,8 @@ describe("meeting end-to-end suite", () => {
 
     const spokenTask = harness.agent.started.at(-1)!;
     expect(spokenTask.prompt.startsWith("what does the parser do")).toBe(true);
-    expect(spokenTask.sessionId).toBe("ses_pinned");
+    // Spoken questions run in a fresh session; the pinned one stays the project's.
+    expect(spokenTask.sessionId).not.toBe("ses_pinned");
     expect(harness.store.getSession("demo")).toBe("ses_pinned");
     expect(harness.store.getTask(spokenTask.taskId)?.voice).toBe(true);
     expect(harness.agent.decisions).toHaveLength(0);

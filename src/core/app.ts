@@ -545,7 +545,11 @@ export class CoreApp {
       updatedAt: this.now(),
       ...(typeof origin === "object" ? { voice: true } : {}),
     };
-    const sessionId = this.store.getSession(project.id);
+    // A spoken question runs in its own session: the pinned one may be busy
+    // with a long task, and the room must not wait for it. Text tasks keep the
+    // project's session, where the operator's context lives.
+    const fresh = typeof origin === "object" && this.config.voice.freshSession;
+    const sessionId = fresh ? undefined : this.store.getSession(project.id);
     const started = await this.agent.startTask({
       taskId: task.id,
       project,
@@ -553,7 +557,8 @@ export class CoreApp {
       ...(sessionId ? { sessionId } : {}),
     });
     task.sessionId = started.sessionId;
-    this.store.setSession(project.id, started.sessionId);
+    // A fresh voice session must not replace the project's pinned one.
+    if (!fresh) this.store.setSession(project.id, started.sessionId);
     this.store.createTask(task);
     if (typeof origin === "object") {
       // The meeting that heard the question, so a later meeting in the same
