@@ -37,6 +37,10 @@ opencodePath = "opencode"
 # piperPath = 'C:\Users\you\AppData\Local\SignalConnector\piper\piper\piper.exe'
 # piperVoicePath = 'C:\Users\you\AppData\Local\SignalConnector\piper\voices\uk_UA-oleksa-high.onnx'
 language = "auto"              # pin the language you speak; "auto" misfires on short clips
+# sherpa-onnx + Ukrainian Moonshine (scripts/install-sherpa.ps1). When both are
+# set it replaces whisper: several times faster on short utterances.
+# sherpaPath = 'C:\Users\you\AppData\Local\SignalConnector\sherpa\...\bin\sherpa-onnx-offline.exe'
+# sherpaModelDir = 'C:\Users\you\AppData\Local\SignalConnector\sherpa\sherpa-onnx-moonshine-base-uk-quantized-2026-02-27'
 # Said once when the avatar has joined and is listening. Set to "" to stay quiet.
 greeting = "Привіт, я під'єднався. Готовий до роботи."
 # Said once when /meet stop ends the meeting. Set to "" to leave silently.

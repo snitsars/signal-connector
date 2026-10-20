@@ -36,6 +36,7 @@ import {
 } from "./pcm.js";
 import { SapiSynthesizer, type Synthesizer } from "./sapi.js";
 import { PiperSynthesizer } from "./piper.js";
+import { SherpaTranscriber } from "./sherpa.js";
 import { normalizeSamples, pcmToWav } from "./wav.js";
 import {
   WhisperTranscriber,
@@ -200,15 +201,24 @@ export class BrowserVoice implements VoicePort {
             voiceName: options.config.voiceName,
           }));
     this.sink = options.sink;
+    // sherpa-onnx with the Ukrainian Moonshine model is the default when it is
+    // configured; whisper stays as the fallback for other languages and older
+    // installs. Both speak the same Transcriber contract.
+    const sherpa = options.config.sherpaPath.trim() && options.config.sherpaModelDir.trim();
     this.transcriber =
       options.transcriber ??
-      new WhisperTranscriber({
-        command: options.config.whisperPath,
-        modelPath: options.config.modelPath,
-        ...(options.config.vadPath ? { vadPath: options.config.vadPath } : {}),
-        ...(options.config.language ? { language: options.config.language } : {}),
-        logger: options.logger,
-      });
+      (sherpa
+        ? new SherpaTranscriber({
+            command: options.config.sherpaPath,
+            modelDir: options.config.sherpaModelDir,
+          })
+        : new WhisperTranscriber({
+            command: options.config.whisperPath,
+            modelPath: options.config.modelPath,
+            ...(options.config.vadPath ? { vadPath: options.config.vadPath } : {}),
+            ...(options.config.language ? { language: options.config.language } : {}),
+            logger: options.logger,
+          }));
   }
 
   /** How many utterances were dropped: a blank transcript or a failed run. */

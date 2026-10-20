@@ -51,7 +51,8 @@ export function parseTranscript(raw: string): string {
 }
 
 /** Spawn the tool, cap it by time, and collect what it printed. */
-function spawnedRunner(run: TranscribeRun): Promise<RunOutcome> {
+/** Spawn a recogniser, feed it nothing, and cap the run by time. Shared with sherpa. */
+export function spawnedRunner(run: TranscribeRun): Promise<RunOutcome> {
   return new Promise((resolve) => {
     const resolved = resolveCommand(run.command, run.args);
     let stdout = "";

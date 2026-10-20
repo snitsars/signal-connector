@@ -72,6 +72,10 @@ export const ConfigSchema = z.object({
       piperVoicePath: z.string().default(""),
     /** Piper's speaking pace; 1 is the model's own, higher is slower. */
     piperLengthScale: z.number().positive().default(1.0),
+    /** sherpa-onnx's offline recogniser; with sherpaModelDir it replaces whisper. */
+    sherpaPath: z.string().default(""),
+    /** Directory with encoder_model.ort, decoder_model_merged.ort and tokens.txt. */
+    sherpaModelDir: z.string().default(""),
       /** Spoken language; "auto" lets the model decide. */
       language: z.string().default("auto"),
     /** Said once when the avatar is in the room and listening. Empty says nothing. */
