@@ -3,7 +3,7 @@ title: 'CI on every supported OS'
 type: 'feature'
 ticket: '9'
 created: '2026-10-21'
-status: 'built'
+status: done
 baseline_revision: 'e422f9501566753773e2619b7dd40ae03f9a21a3'
 route: 'quick'
 route_source: 'auto'
