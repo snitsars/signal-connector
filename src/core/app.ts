@@ -1242,11 +1242,16 @@ export class CoreApp {
     if (this.store.getValue(`voiceMeeting:${task.id}`) !== String(active.startedAt)) return;
     const handle = active.voice;
     if (!handle) return;
-    const text =
+    const body =
       task.state === "failed"
         ? `The task failed: ${task.error ?? "unknown error"}`
         : task.summary ?? "The task is done.";
-    void handle.speak(text).catch((err: unknown) => {
+    // An answer can arrive after the next question; naming the question keeps a
+    // late or out-of-order clip understandable without replaying in lockstep.
+    const question = task.prompt.replace(/\s+/g, " ").trim();
+    const snippet = question.length > 70 ? `${question.slice(0, 69)}…` : question;
+    const prefix = this.config.voice.answerPrefix.replace("{question}", snippet);
+    void handle.speak(`${prefix}${body}`).catch((err: unknown) => {
       this.logger.warn("voice: could not speak the answer", { error: String(err) });
     });
   }

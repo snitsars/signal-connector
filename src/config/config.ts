@@ -106,6 +106,8 @@ export const ConfigSchema = z.object({
     greeting: z.string().default("Привіт, я під'єднався. Готовий до роботи."),
     /** Said once when the operator asks the meeting to stop. Empty says nothing. */
     farewell: z.string().default("До зустрічі!"),
+    /** Spoken before an answer; {question} is the prompt it answers. */
+    answerPrefix: z.string().default("Відповідь на «{question}»: "),
       /** RMS below which audio counts as room tone, not speech (0..1). */
       rmsFloor: z.number().default(0.01),
       /** A window shorter than this is noise, not an utterance to answer. */

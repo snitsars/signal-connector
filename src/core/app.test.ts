@@ -2050,6 +2050,22 @@ describe("voice in the meeting", () => {
     voice.releaseSpeech();
     await ctx.app.stop();
   });
+
+  it("names the question before a spoken answer", async () => {
+    await inRoom();
+    voice.utterance("what does the parser do");
+    await tick();
+    await tick();
+    const taskId = ctx.agent.started.at(-1)!.taskId;
+    ctx.agent.emit({ type: "idle", taskId, at: Date.now(), summary: "it handles quotes" });
+    await tick();
+    await tick();
+
+    const spoken = voice.spoken.at(-1)!;
+    expect(spoken).toContain("Відповідь на «what does the parser do»");
+    expect(spoken).toContain("it handles quotes");
+    await ctx.app.stop();
+  });
 });
 
 describe("meeting telemetry, presence and the watchdog", () => {
