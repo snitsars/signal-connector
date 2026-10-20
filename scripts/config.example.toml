@@ -102,3 +102,6 @@ path = 'C:\Sources\myproject'
 # honoured when known. providers names the room hosts to accept — there is no
 # default, so set it or every paste is refused as a foreign provider.
 # meet = { allow = [{ id = "+1000", label = "+1000" }], providers = ["meet.jit.si"] }
+# Development only: /meet start creates an unguessable room on createHost and
+# shares the link in the group. Keep it false outside development.
+# meet = { allow = [{ id = "+1000" }], providers = ["meet.jit.si"], create = true, createHost = "meet.jit.si", roomPrefix = "signalconnector" }

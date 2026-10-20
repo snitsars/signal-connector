@@ -212,6 +212,12 @@ export const ConfigSchema = z.object({
               .optional()
               .default([]),
             providers: z.array(z.string()).optional(),
+            /** Development only: let /meet start create a random Jitsi room. */
+            create: z.boolean().default(false),
+            /** The host a created room lives on. */
+            createHost: z.string().default("meet.jit.si"),
+            /** A readable prefix for the random room name. */
+            roomPrefix: z.string().default("signalconnector"),
           })
           .optional(),
       }),

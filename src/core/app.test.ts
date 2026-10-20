@@ -2066,6 +2066,47 @@ describe("voice in the meeting", () => {
     expect(spoken).toContain("it handles quotes");
     await ctx.app.stop();
   });
+
+  it("creates a room and shares its link when creation is enabled", async () => {
+    const projects = [
+      {
+        name: "demo",
+        path: "/tmp/demo",
+        session: "ses_pinned",
+        meet: {
+          allow: [{ id: "+1000", label: "+1000" }],
+          providers: ["meet.jit.si"],
+          create: true,
+          createHost: "meet.jit.si",
+          roomPrefix: "signalconnector",
+        },
+      },
+    ];
+    meeting = new FakeMeeting();
+    voice = new FakeVoice();
+    ctx = makeApp(projects, {}, undefined, meeting, reachable, undefined, voice);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.signal.emitMessage(incoming("/meet start"));
+    await tick();
+    await tick();
+
+    const joined = meeting.joins.at(-1)!;
+    expect(joined.link).toMatch(/^https:\/\/meet\.jit\.si\/signalconnector-[a-z0-9_-]+$/);
+    const posted = ctx.signal.sent.find((m) => m.text.includes("Room:"));
+    expect(posted?.text).toContain(joined.link);
+    expect(ctx.store.getOpenMeeting()?.link).toBe(joined.link);
+    await ctx.app.stop();
+  });
+
+  it("refuses /meet start when room creation is off", async () => {
+    await inRoom();
+    ctx.signal.emitMessage(incoming("/meet start"));
+    await tick();
+    expect(ctx.signal.sent.at(-1)!.text).toContain("Room creation is off");
+    await ctx.app.stop();
+  });
 });
 
 describe("meeting telemetry, presence and the watchdog", () => {

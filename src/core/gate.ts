@@ -118,6 +118,17 @@ export function decidePaste(input: PasteInput): PasteDecision {
   return { ok: true, link };
 }
 
+/** Whether a sender may act for a project's meetings; the same rule as a paste. */
+export function isAllowedIdentity(input: {
+  delivery: "data" | "sync";
+  sender: string;
+  senderUuid?: string;
+  allow: ReadonlyArray<MeetIdentity>;
+  now?: number;
+}): boolean {
+  return resolveIdentity(input, input.allow).ok;
+}
+
 /**
  * Identity: the sync path is the operator's own linked device by construction;
  * on the data path the sender must match a configured entry. The uuid is
@@ -125,7 +136,7 @@ export function decidePaste(input: PasteInput): PasteDecision {
  * uuid matches at all, so the order of `allow` entries cannot decide the result.
  */
 function resolveIdentity(
-  input: PasteInput,
+  input: Pick<PasteInput, "delivery" | "sender" | "senderUuid" | "allow" | "now">,
   allow: ReadonlyArray<MeetIdentity>,
 ): { ok: true } | { ok: false; detail?: string } {
   if (input.delivery === "sync") return { ok: true };

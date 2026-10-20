@@ -35,7 +35,7 @@ import type {
   VoicePort,
 } from "./ports.js";
 import { renderStyled } from "./format.js";
-import { decidePaste, PROVIDER_HOSTS, type PasteRefusal } from "./gate.js";
+import { decidePaste, isAllowedIdentity, PROVIDER_HOSTS, type PasteDecision, type PasteRefusal } from "./gate.js";
 import { MARK } from "./progress.js";
 import { HELP_TEXT, KNOWN_COMMANDS, parseInput } from "./router.js";
 import {
@@ -715,26 +715,56 @@ export class CoreApp {
       return;
     }
 
-    // The gate runs before availability, before the claim and before any
-    // browser: identity, link shape and provider are decided here first.
     const configured = this.config.projects.find((p) => PROJECT_ID(p.name) === project.id);
-    const decision = decidePaste({
-      delivery: msg?.delivery ?? "data",
-      sender: msg?.sender ?? "",
-      ...(msg?.senderUuid ? { senderUuid: msg.senderUuid } : {}),
-      allow: configured?.meet?.allow ?? [],
-      text: trimmed,
-      providerHosts: configured?.meet?.providers ?? PROVIDER_HOSTS,
-    });
-    if (!decision.ok) {
-      // Only the category is logged: the text is the credential and never
-      // reaches a log line, a refusal or a group message.
-      this.logger.info("meeting: paste refused", {
-        project: project.name,
-        category: decision.category,
+    const meet = configured?.meet;
+    const wantsCreate = /^(start|new)$/i.test(trimmed);
+
+    let decision: PasteDecision;
+    let createdLink: URL | undefined;
+    if (wantsCreate) {
+      // Development only: the connector picks an unguessable room name on the
+      // configured host and shares the link in this project's group. Jitsi needs
+      // no account and no key; the randomness is the protection.
+      if (!meet?.create) {
+        await this.reply("Room creation is off. Send /meet <link> instead.");
+        return;
+      }
+      if (
+        !isAllowedIdentity({
+          delivery: msg?.delivery ?? "data",
+          sender: msg?.sender ?? "",
+          ...(msg?.senderUuid ? { senderUuid: msg.senderUuid } : {}),
+          allow: meet.allow,
+        })
+      ) {
+        this.logger.info("meeting: create refused", { project: project.name });
+        await this.refusePaste(project.name, { ok: false, category: "not-authorised" });
+        return;
+      }
+      const name = `${meet.roomPrefix}-${crypto.randomBytes(9).toString("base64url").toLowerCase()}`;
+      createdLink = new URL(`/${name}`, `https://${meet.createHost}`);
+      decision = { ok: true, link: createdLink };
+    } else {
+      // The gate runs before availability, before the claim and before any
+      // browser: identity, link shape and provider are decided here first.
+      decision = decidePaste({
+        delivery: msg?.delivery ?? "data",
+        sender: msg?.sender ?? "",
+        ...(msg?.senderUuid ? { senderUuid: msg.senderUuid } : {}),
+        allow: meet?.allow ?? [],
+        text: trimmed,
+        providerHosts: meet?.providers ?? PROVIDER_HOSTS,
       });
-      await this.refusePaste(project.name, decision);
-      return;
+      if (!decision.ok) {
+        // Only the category is logged: the text is the credential and never
+        // reaches a log line, a refusal or a group message.
+        this.logger.info("meeting: paste refused", {
+          project: project.name,
+          category: decision.category,
+        });
+        await this.refusePaste(project.name, decision);
+        return;
+      }
     }
 
     if (!this.meetingPort) {
@@ -771,7 +801,7 @@ export class CoreApp {
     try {
       // One atomic write decides who holds the meeting slot: the partial unique
       // index refuses a second open row instead of racing a read-then-write.
-      this.store.claimMeeting({ projectId: project.id, link: trimmed, startedAt });
+      this.store.claimMeeting({ projectId: project.id, link: decision.link.href, startedAt });
     } catch {
       const holder = this.store.getOpenMeeting();
       if (holder) await this.refuseMeeting(holder);
@@ -784,7 +814,8 @@ export class CoreApp {
     try {
       sent = await this.sendProject(
         project.id,
-        `${MARK.working} **Meeting** · joining as \`${project.name}\``,
+        `${MARK.working} **Meeting** · joining as \`${project.name}\`` +
+          (createdLink ? `\nRoom: ${createdLink.href}` : ""),
       );
     } catch (err: unknown) {
       // No message means no meeting to watch; free the slot rather than hold it.
@@ -813,7 +844,7 @@ export class CoreApp {
     const joining = this.meetingPort.join({
       projectId: project.id,
       projectName: project.name,
-      link: trimmed,
+      link: decision.link.href,
       onState: (event) => {
         this.enqueue(() => this.onMeetingState(active, event));
       },
