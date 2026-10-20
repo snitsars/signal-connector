@@ -543,6 +543,21 @@ where they were; `setup` only adds what is missing.
    `~/.config/SignalConnector` elsewhere. This removes the store, logs and secrets; export anything
    you want to keep first.
 
+## Releasing
+
+One tag produces both artifacts: the npm package and a GitHub release with the same tarball and its
+SHA-256.
+
+1. Bump `version` in `package.json` and commit it.
+2. Push a matching tag: `git tag v0.1.0 && git push origin v0.1.0`.
+3. `release.yml` checks the tag against the manifest, runs typecheck, tests and build, publishes to
+   npm with provenance, and creates the release with `signal-connector-<version>.tgz` and its
+   checksum.
+
+The workflow needs an `NPM_TOKEN` repository secret (an npm automation token). Without it the publish
+step fails before anything is uploaded; the checksum and the GitHub release are still produced only
+after a successful publish, so a failed run leaves no half-release.
+
 ## Security
 
 Secrets (Signal account credentials, API keys) go through `src/config/secrets.ts`. They are never
