@@ -157,7 +157,10 @@ const SECRETS_FIX = "install PowerShell 7 from https://aka.ms/powershell";
  */
 function javaExecutable(config: StepContext["config"]): string {
   const configured = config?.signal.command?.[0];
-  if (configured && /^java(w)?(\.exe)?$/i.test(path.basename(configured))) {
+  // The configured path may use the other platform's separators (a Windows
+  // config inspected on macOS, or the reverse): compare the last segment.
+  const base = configured?.split(/[\\/]/).pop() ?? "";
+  if (configured && /^java(w)?(\.exe)?$/i.test(base)) {
     return configured;
   }
   return "java";

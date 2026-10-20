@@ -88,6 +88,9 @@ function bytesOrUndefined(file: string): Buffer | undefined {
     return fs.readFileSync(file);
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    // A parent that is a file means the path cannot exist either (ENOTDIR); it
+    // is a missing install, not a read failure worth throwing at the operator.
+    if ((err as NodeJS.ErrnoException).code === "ENOTDIR") return undefined;
     throw new Error(`cannot read ${file}: ${oneLine(err)}`);
   }
 }

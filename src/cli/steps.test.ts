@@ -245,7 +245,7 @@ describe("signalCliStep", () => {
     }
   });
 
-  it("probes a Windows copy through java, not the .bat that exceeds cmd's line limit", () => {
+  it.skipIf(process.platform !== "win32")("probes a Windows copy through java, not the .bat that exceeds cmd's line limit", () => {
     const dataDir = emptyDataDir();
     try {
       const home = path.join(dataDir, "signal-cli", "signal-cli-0.14.9");

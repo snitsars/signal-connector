@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseSherpa, SherpaTranscriber, type SherpaOptions } from "./sherpa.js";
 import type { ProcessRunner, RunOutcome } from "./whisper.js";
@@ -36,9 +37,9 @@ describe("SherpaTranscriber", () => {
     expect(result).toEqual({ ok: true, text: "скільки тестів у проєкті" });
     expect(runs[0]!.command).toBe("sherpa-onnx-offline.exe");
     expect(runs[0]!.args).toEqual([
-      `--moonshine-encoder=${MODEL}\\encoder_model.ort`,
-      `--moonshine-merged-decoder=${MODEL}\\decoder_model_merged.ort`,
-      `--tokens=${MODEL}\\tokens.txt`,
+      `--moonshine-encoder=${path.join(MODEL, "encoder_model.ort")}`,
+      `--moonshine-merged-decoder=${path.join(MODEL, "decoder_model_merged.ort")}`,
+      `--tokens=${path.join(MODEL, "tokens.txt")}`,
       "--num-threads=4",
       "C:\\temp\\u.wav",
     ]);
