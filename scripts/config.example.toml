@@ -37,6 +37,14 @@ opencodePath = "opencode"
 # piperPath = 'C:\Users\you\AppData\Local\SignalConnector\piper\piper\piper.exe'
 # piperVoicePath = 'C:\Users\you\AppData\Local\SignalConnector\piper\voices\uk_UA-oleksa-high.onnx'
 language = "auto"              # pin the language you speak; "auto" misfires on short clips
+# Which recogniser to use: auto (sherpa if configured, else whisper), or force
+# whisper | sherpa | http. "http" sends each utterance to an OpenAI-compatible
+# /v1/audio/transcriptions endpoint and needs the transcription-api-key secret
+# (or TRANSCRIPTION_API_KEY in the environment) — audio leaves the machine.
+transcriber = "auto"
+# httpTranscriptionUrl = 'http://127.0.0.1:8000/v1/audio/transcriptions'
+# httpTranscriptionModel = "openai/whisper-large-v3"
+# httpTranscriptionLanguage = "uk"
 # sherpa-onnx + Ukrainian Moonshine (scripts/install-sherpa.ps1). When both are
 # set it replaces whisper: several times faster on short utterances.
 # sherpaPath = 'C:\Users\you\AppData\Local\SignalConnector\sherpa\...\bin\sherpa-onnx-offline.exe'

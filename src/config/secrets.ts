@@ -27,7 +27,7 @@ export class InMemorySecretStore implements SecretStore {
 
 function runPowerShell(script: string, input: string): string {
   const result = spawnSync(
-    "powershell.exe",
+    powershell(),
     ["-NoProfile", "-NonInteractive", "-Command", script],
     { input, encoding: "utf8", windowsHide: true },
   );
@@ -35,6 +35,24 @@ function runPowerShell(script: string, input: string): string {
     throw new Error(`secret store failure: ${result.stderr || result.status}`);
   }
   return (result.stdout || "").trim();
+}
+
+/**
+ * Prefer PowerShell 7. Windows PowerShell 5.1 can fail to autoload its Security
+ * module when spawned from a service or a test runner ("ConvertTo-SecureString
+ * ... could not be loaded"), and that breaks every secret. `pwsh` ships the
+ * module in-box; the probe runs once and the result is cached.
+ */
+let shell: string | undefined;
+function powershell(): string {
+  if (shell) return shell;
+  const probe = spawnSync(
+    "pwsh.exe",
+    ["-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.Major"],
+    { encoding: "utf8", windowsHide: true },
+  );
+  shell = probe.status === 0 ? "pwsh.exe" : "powershell.exe";
+  return shell;
 }
 
 const PROTECT =

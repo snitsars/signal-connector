@@ -37,6 +37,7 @@ import {
 import { SapiSynthesizer, type Synthesizer } from "./sapi.js";
 import { PiperSynthesizer } from "./piper.js";
 import { SherpaTranscriber } from "./sherpa.js";
+import { HttpTranscriber } from "./httpTranscriber.js";
 import { normalizeSamples, pcmToWav } from "./wav.js";
 import {
   WhisperTranscriber,
@@ -128,6 +129,8 @@ export interface BrowserVoiceOptions {
   synthesizer?: Synthesizer;
   /** Where spoken clips are played; absent means the adapter is deaf-mute. */
   sink?: SpeechSink;
+  /** The hosted transcription key, resolved from the secret store by index.ts. */
+  transcriptionKey?: string;
 }
 
 /** One listening session: the accumulated audio between two cuts. */
@@ -201,24 +204,33 @@ export class BrowserVoice implements VoicePort {
             voiceName: options.config.voiceName,
           }));
     this.sink = options.sink;
-    // sherpa-onnx with the Ukrainian Moonshine model is the default when it is
-    // configured; whisper stays as the fallback for other languages and older
-    // installs. Both speak the same Transcriber contract.
-    const sherpa = options.config.sherpaPath.trim() && options.config.sherpaModelDir.trim();
+    // The operator picks the recogniser; "auto" keeps the local default and
+    // never sends audio anywhere. A hosted endpoint is used only when asked for,
+    // so a cloud choice is always deliberate.
+    const choice = options.config.transcriber;
+    const local = choice === "sherpa" || (choice === "auto" && !!options.config.sherpaPath && !!options.config.sherpaModelDir);
+    const hosted = choice === "http";
     this.transcriber =
       options.transcriber ??
-      (sherpa
-        ? new SherpaTranscriber({
-            command: options.config.sherpaPath,
-            modelDir: options.config.sherpaModelDir,
+      (hosted
+        ? new HttpTranscriber({
+            url: options.config.httpTranscriptionUrl,
+            model: options.config.httpTranscriptionModel,
+            language: options.config.httpTranscriptionLanguage,
+            apiKey: options.transcriptionKey ?? "",
           })
-        : new WhisperTranscriber({
-            command: options.config.whisperPath,
-            modelPath: options.config.modelPath,
-            ...(options.config.vadPath ? { vadPath: options.config.vadPath } : {}),
-            ...(options.config.language ? { language: options.config.language } : {}),
-            logger: options.logger,
-          }));
+        : local
+          ? new SherpaTranscriber({
+              command: options.config.sherpaPath,
+              modelDir: options.config.sherpaModelDir,
+            })
+          : new WhisperTranscriber({
+              command: options.config.whisperPath,
+              modelPath: options.config.modelPath,
+              ...(options.config.vadPath ? { vadPath: options.config.vadPath } : {}),
+              ...(options.config.language ? { language: options.config.language } : {}),
+              logger: options.logger,
+            }));
   }
 
   /** How many utterances were dropped: a blank transcript or a failed run. */

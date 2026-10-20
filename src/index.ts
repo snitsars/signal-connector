@@ -130,10 +130,20 @@ async function main(): Promise<void> {
     // Presence and audio readings are plain telemetry; core owns the budgets.
     telemetryMs: config.meeting.telemetryMs,
   });
+  // The hosted transcription key is a secret: the DPAPI store is the durable
+  // place, and an environment variable is a convenience for a quick trial.
+  // It never reaches the config file, a log line or an error message.
+  const transcriptionKey =
+    (await secrets.get("transcription-api-key")) ??
+    process.env.TRANSCRIPTION_API_KEY ??
+    "";
+  logger.info("voice: transcriber", { kind: config.voice.transcriber });
+
   voice = new BrowserVoice({
     config: config.voice,
     logger,
     workDir: voiceDir,
+    ...(transcriptionKey ? { transcriptionKey } : {}),
     // Speech goes back into the room's own synthetic microphone, over the CDP
     // session the meeting already has open.
     sink: {

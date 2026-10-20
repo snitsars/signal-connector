@@ -72,6 +72,14 @@ export const ConfigSchema = z.object({
       piperVoicePath: z.string().default(""),
     /** Piper's speaking pace; 1 is the model's own, higher is slower. */
     piperLengthScale: z.number().positive().default(1.0),
+    /** Which recogniser to use: auto (sherpa, else whisper), or a forced one. */
+    transcriber: z.enum(["auto", "whisper", "sherpa", "http"]).default("auto"),
+    /** OpenAI-compatible /v1/audio/transcriptions endpoint; `${model}` not needed. */
+    httpTranscriptionUrl: z.string().default(""),
+    /** Model field sent to that endpoint, e.g. openai/whisper-large-v3. */
+    httpTranscriptionModel: z.string().default("openai/whisper-large-v3"),
+    /** Language hint for that endpoint; "auto" sends none. */
+    httpTranscriptionLanguage: z.string().default("uk"),
     /** sherpa-onnx's offline recogniser; with sherpaModelDir it replaces whisper. */
     sherpaPath: z.string().default(""),
     /** Directory with encoder_model.ort, decoder_model_merged.ort and tokens.txt. */
