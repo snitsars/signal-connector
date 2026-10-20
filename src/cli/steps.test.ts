@@ -290,11 +290,53 @@ describe("configStep", () => {
 });
 
 describe("secretsStep", () => {
-  it("reports the in-memory limitation on other platforms as ok", () => {
-    const report = secretsStep(undefined, { platform: "linux" }).check(context());
+  it("reports the persistent file store when no keyring tool exists", () => {
+    const report = secretsStep(undefined, {
+      platform: "linux",
+      hasCommand: () => false,
+    }).check(context());
 
     expect(report.status).toBe("ok");
-    expect(report.reason).toContain("in memory");
+    expect(report.reason).toContain("file store");
+    expect(report.reason).toContain("secrets.json");
+    expect(report.reason).toContain("user-only");
+    expect(report.reason).not.toContain("in memory");
+  });
+
+  it("names the Linux keyring when secret-tool is present", () => {
+    const report = secretsStep(undefined, {
+      platform: "linux",
+      hasCommand: (command) => command === "secret-tool",
+    }).check(context());
+
+    expect(report.status).toBe("ok");
+    expect(report.reason).toContain("secret-tool");
+  });
+
+  it("names the macOS keychain when security is present", () => {
+    const report = secretsStep(undefined, {
+      platform: "darwin",
+      hasCommand: (command) => command === "security",
+    }).check(context());
+
+    expect(report.status).toBe("ok");
+    expect(report.reason).toContain("Keychain");
+  });
+
+  it("accepts an injected store kind without probing tools", () => {
+    let probed = false;
+    const report = secretsStep(undefined, {
+      platform: "linux",
+      hasCommand: () => {
+        probed = true;
+        return false;
+      },
+      storeKind: () => "file",
+    }).check(context());
+
+    expect(report.status).toBe("ok");
+    expect(report.reason).toContain("file store");
+    expect(probed).toBe(false);
   });
 
   it("reports PowerShell as ok on Windows", () => {

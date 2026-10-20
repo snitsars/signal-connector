@@ -45,8 +45,8 @@ is never overwritten or deleted.
 The registry checks, in order: the Node floor (>= 22.13), Java (the configured JDK or `java` on
 PATH), signal-cli (the configured `signal.command`/`signal.cliPath` or PATH), opencode (the
 configured `agent.opencodePath` or PATH), the data directory, `config.toml` (present and valid,
-read without creating anything), the secret store (PowerShell 7 for DPAPI on Windows, an
-in-memory store elsewhere), and the opencode plugin (installed and byte-identical to the package).
+read without creating anything), the secret store (the kind actually in use on this platform), and
+the opencode plugin (installed and byte-identical to the package).
 The daemon runs the same registry before it opens the store, starts
 signal-cli or launches a browser; if any step is missing it prints those lines and exits 1.
 
@@ -64,7 +64,7 @@ src/
     agent/    opencode v2 server adapter, CLI fallback, event mapper, diff
     fakes/    in-memory ports for tests
   store/      SQLite
-  config/     config.toml loader, DPAPI secrets
+  config/     config.toml loader, platform secret stores
   cli/        args, setup (doctor/setup), link, dry-run
 ```
 
@@ -427,5 +427,24 @@ Free-form text is sent to the active project's session.
 
 ## Security
 
-Secrets (Signal account credentials, API keys) go through `src/config/secrets.ts`
-(Windows DPAPI, per-user). They are never written to the repo or to a log line. See AD-9.
+Secrets (Signal account credentials, API keys) go through `src/config/secrets.ts`. They are never
+written to the repo, the config file, a log line or an error message. See AD-9.
+
+Where they live, per platform:
+
+| Platform | Store | Location |
+|---|---|---|
+| Windows | DPAPI, per-user | `<data dir>\secrets\<key>.dat` |
+| macOS | Keychain (`security`) | service `signal-connector`, account is the key |
+| Linux | Secret Service (`secret-tool`) | attributes `service=signal-connector`, `key=<key>` |
+| Any platform without the keyring tool | JSON file | `<data dir>/secrets/secrets.json` |
+
+The data directory is `%APPDATA%\SignalConnector` on Windows and
+`~/.config/SignalConnector` elsewhere. On macOS and Linux the keyring is used when its tool is
+installed; if the tool is absent or a keyring command fails, the store falls back to the file.
+The file is **plaintext at rest**: the directory is created `0700` and the file `0600`, and every
+write replaces the file atomically, so only the current user can read it. On Windows the existing
+DPAPI files and their format are unchanged.
+
+`node dist/index.js doctor` names the store actually selected, and `src/config/secrets.ts` exposes
+the same choice as `secretStoreKind(dir)`.

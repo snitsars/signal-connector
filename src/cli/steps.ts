@@ -11,6 +11,12 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveCommand } from "../adapters/spawnCommand.js";
+import {
+  fileSecretPath,
+  secretsDirectory,
+  secretStoreKind,
+  type SecretStoreKind,
+} from "../config/secrets.js";
 import type { ConfigRead, SetupStep, StepContext, StepReport } from "./setup.js";
 
 /** A command check may take this long before it is reported as failed. */
@@ -194,8 +200,26 @@ export function opencodeStep(run: RunCommand = defaultRunCommand): SyncSetupStep
 }
 
 export interface SecretsEnv {
-  /** Injectable so the non-Windows branch is testable everywhere. */
+  /** Injectable so every platform branch is testable everywhere. */
   platform?: NodeJS.Platform;
+  /** Injectable tool lookup; defaults to a PATH scan. */
+  hasCommand?: (command: string) => boolean;
+  /** Injectable selection, so a test can name a kind without a keychain. */
+  storeKind?: (dir: string) => SecretStoreKind;
+}
+
+function nonWindowsSecretReason(
+  kind: SecretStoreKind,
+  platform: NodeJS.Platform,
+  dataDir: string,
+): string {
+  if (kind === "keyring") {
+    return platform === "darwin"
+      ? "macOS Keychain (security) holds secrets"
+      : "Secret Service (secret-tool) holds secrets";
+  }
+  const file = fileSecretPath(secretsDirectory(dataDir));
+  return `file store at ${file} (plaintext at rest, user-only permissions)`;
 }
 
 export function secretsStep(
@@ -206,15 +230,19 @@ export function secretsStep(
   return {
     id: "secrets",
     title: "secret store",
-    check: () => {
+    check: (ctx) => {
       if (platform !== "win32") {
-        return {
-          status: "ok",
-          reason: "non-Windows: secrets are kept in memory only and are not persisted",
-        };
+        const kind =
+          env.storeKind?.(ctx.dataDir) ??
+          secretStoreKind(ctx.dataDir, {
+            platform,
+            ...(env.hasCommand ? { hasCommand: env.hasCommand } : {}),
+          });
+        return { status: "ok", reason: nonWindowsSecretReason(kind, platform, ctx.dataDir) };
       }
-      // The store prefers PowerShell 7 but falls back to Windows PowerShell;
-      // either one can protect a secret, so neither alone is required.
+      // Windows still needs a PowerShell for DPAPI. The store prefers
+      // PowerShell 7 but falls back to Windows PowerShell; either can protect
+      // a secret, so neither alone is required.
       let lastReason = "no PowerShell could be started";
       for (const exe of ["pwsh.exe", "powershell.exe"]) {
         const checked = inspect(
