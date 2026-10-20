@@ -36,6 +36,19 @@ writes a config, creates the data directory, constructs the secret store or open
 `setup` walks the same registry in the same order, skips steps that already pass, applies the rest
 and stops at the first failure, so a rerun resumes from there.
 
+When no signal-cli is configured or on PATH, `setup` fetches one: it asks GitHub for the latest
+release, downloads the generic `signal-cli-<version>.tar.gz` (pure Java, not the Linux-native build),
+checks that the archive names the version it claims, and extracts it with the system `tar` into
+`<data dir>/signal-cli/signal-cli-<version>`. The step then finds that copy, so no config edit is
+needed to get it installed. signal-cli needs Java 17 or newer, and recent releases need the
+configured JDK (0.14.9 is compiled for Java 25); an already-installed copy is never downloaded
+again. On Windows, point `signal.command` at that JDK with
+`-cp <data dir>/signal-cli/signal-cli-<version>/lib/* org.asamk.signal.Main` (as
+`scripts/setup.ps1` does) rather than at the shipped `.bat`, whose long classpath overflows cmd's
+line limit under a deep data directory. The download is bounded and only GitHub hosts are
+contacted, and `doctor` never downloads anything. Offline, the step stays `missing` with a
+one-line reason and `scripts/install-signal-cli.ps1` as the manual fallback.
+
 `plugin install` copies the packaged `plugins/signal-connector.ts` into `~/.config/opencode/plugins`
 and prints the version it wrote; `plugin status` compares the installed bytes with the packaged ones
 and prints `installed`, `stale`, `absent` or `conflict`. A project-local
@@ -43,10 +56,11 @@ and prints `installed`, `stale`, `absent` or `conflict`. A project-local
 is never overwritten or deleted.
 
 The registry checks, in order: the Node floor (>= 22.13), Java (the configured JDK or `java` on
-PATH), signal-cli (the configured `signal.command`/`signal.cliPath` or PATH), opencode (the
-configured `agent.opencodePath` or PATH), the data directory, `config.toml` (present and valid,
-read without creating anything), the secret store (the kind actually in use on this platform), and
-the opencode plugin (installed and byte-identical to the package).
+PATH), signal-cli (the configured `signal.command`/`signal.cliPath`, a PATH copy, or an installed
+copy under the data directory), opencode (the configured `agent.opencodePath` or PATH), the data
+directory, `config.toml` (present and valid, read without creating anything), the secret store (the
+kind actually in use on this platform), and the opencode plugin (installed and byte-identical to the
+package).
 The daemon runs the same registry before it opens the store, starts
 signal-cli or launches a browser; if any step is missing it prints those lines and exits 1.
 

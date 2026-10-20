@@ -1,8 +1,9 @@
 /**
- * The product prerequisites, one step each. Every step is read-only: it probes
+ * The product prerequisites, one step each. Every check is read-only: it probes
  * the machine and returns `ok | missing | failed` plus the exact fix, so
  * `doctor` can describe a machine and the daemon can refuse to boot on the same
- * lines. Installers arrive in later stories; nothing here writes.
+ * lines. Only an `apply` writes, and only `setup` calls one — today the
+ * signal-cli download and the opencode plugin copy.
  *
  * Command steps take their runner as an argument, so tests can prove the
  * classification and the guidance without Java, signal-cli or opencode.
@@ -17,6 +18,13 @@ import {
   secretStoreKind,
   type SecretStoreKind,
 } from "../config/secrets.js";
+import {
+  installSignalCli,
+  installedCopies,
+  type ExtractArchive,
+  type FetchLike,
+  type InstalledSignalCli,
+} from "./signalCliInstall.js";
 import type { ConfigRead, SetupStep, StepContext, StepReport } from "./setup.js";
 
 /** A command check may take this long before it is reported as failed. */
@@ -100,7 +108,7 @@ type Inspection =
   | { status: "failed"; reason: string };
 
 const MISSING_TEXT =
-  /not recognized as an internal or external command|is not recognized|command not found|no such file or directory|cannot find the file|could not find/i;
+  /not recognized as an internal or external command|is not recognized|command not found|no such file or directory|cannot find the file|cannot find the path specified|could not find|classnotfoundexception/i;
 
 /** Classifies a probe without leaking a stack: one line, always. */
 function inspect(label: string, result: CommandResult): Inspection {
@@ -140,7 +148,8 @@ function commandReport(label: string, fix: string, result: CommandResult): StepR
 const JAVA_FIX =
   'run "pwsh scripts/ensure-java.ps1" (or install a JDK 25 from https://adoptium.net)';
 const SIGNAL_CLI_FIX =
-  'run "pwsh scripts/install-signal-cli.ps1", then set signal.cliPath in config.toml';
+  'run "node dist/index.js setup" (needs Java 17 or newer; recent releases need the configured ' +
+  'JDK) or "pwsh scripts/install-signal-cli.ps1", then set signal.command in config.toml';
 const OPENCODE_FIX =
   'install opencode with "npm install -g opencode-ai" (see https://opencode.ai/docs)';
 const SECRETS_FIX = "install PowerShell 7 from https://aka.ms/powershell";
@@ -157,10 +166,26 @@ function javaExecutable(config: StepContext["config"]): string {
   return "java";
 }
 
-function signalCliArgv(config: StepContext["config"]): string[] {
+/**
+ * Every place the check looks for signal-cli, most specific first: the
+ * configured full command, then `signal.cliPath`, then PATH. Duplicate argv are
+ * dropped so a config that names `signal-cli` probes it once.
+ */
+function signalCliCandidates(config: StepContext["config"]): string[][] {
+  const candidates: string[][] = [];
+  const seen = new Set<string>();
+  const add = (argv: string[]): void => {
+    const key = JSON.stringify(argv);
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(argv);
+  };
+
   const command = config?.signal.command;
-  if (command && command.length > 0) return [...command, "--version"];
-  return [config?.signal.cliPath || "signal-cli", "--version"];
+  if (command && command.length > 0) add([...command, "--version"]);
+  if (config?.signal.cliPath) add([config.signal.cliPath, "--version"]);
+  add(["signal-cli", "--version"]);
+  return candidates;
 }
 
 /** A step whose check completes synchronously; the factory's tests rely on it. */
@@ -177,12 +202,94 @@ export function javaStep(run: RunCommand = defaultRunCommand): SyncSetupStep {
   };
 }
 
-export function signalCliStep(run: RunCommand = defaultRunCommand): SyncSetupStep {
+export interface SignalCliEnv {
+  /** Injectable so the step's apply never reaches the network in a test. */
+  fetch?: FetchLike;
+  /** Injectable so the step's apply never shells out to `tar` in a test. */
+  extract?: ExtractArchive;
+  /** Injectable so both launcher conventions are testable on any machine. */
+  platform?: NodeJS.Platform;
+}
+
+/**
+ * The probe for an installed copy. On Windows the release's `.bat` rebuilds a
+ * classpath longer than cmd's ~8 KB line limit once the install path is deep,
+ * so the copy is started the way the generated config starts it: java with the
+ * wildcard classpath. Elsewhere the shipped launcher works as-is.
+ */
+function installedCopyArgv(
+  copy: InstalledSignalCli,
+  config: StepContext["config"],
+  platform: NodeJS.Platform,
+): string[] {
+  if (platform === "win32") {
+    return [
+      javaExecutable(config),
+      "-cp",
+      path.join(copy.home, "lib", "*"),
+      "org.asamk.signal.Main",
+      "--version",
+    ];
+  }
+  return [copy.path, "--version"];
+}
+
+export function signalCliStep(
+  run: RunCommand = defaultRunCommand,
+  env: SignalCliEnv = {},
+): SyncSetupStep {
+  const platform = env.platform ?? process.platform;
   return {
     id: "signal-cli",
     title: "signal-cli",
-    check: (ctx) =>
-      commandReport("signal-cli", SIGNAL_CLI_FIX, run(signalCliArgv(ctx.config))),
+    check: (ctx) => {
+      // A configured command/path or a PATH copy comes first. A failed probe is
+      // reported as failed rather than silently replaced by another copy.
+      for (const argv of signalCliCandidates(ctx.config)) {
+        const checked = inspect("signal-cli", run(argv));
+        if (checked.status === "ok") return { status: "ok", reason: checked.output };
+        if (checked.status === "failed") {
+          return { status: "failed", reason: checked.reason, fix: SIGNAL_CLI_FIX };
+        }
+      }
+
+      // What the step's own apply installs: a version directory under the data
+      // directory. Scanning it is also what proves the download landed.
+      for (const copy of installedCopies(ctx.dataDir, platform)) {
+        const checked = inspect(
+          "signal-cli",
+          run(installedCopyArgv(copy, ctx.config, platform)),
+        );
+        if (checked.status === "ok") {
+          return { status: "ok", reason: `signal-cli ${copy.version} at ${copy.path}` };
+        }
+        if (checked.status === "failed") {
+          return { status: "failed", reason: checked.reason, fix: SIGNAL_CLI_FIX };
+        }
+      }
+
+      return {
+        status: "missing",
+        reason: `signal-cli was not found in the config, on PATH, or under ${path.join(ctx.dataDir, "signal-cli")}`,
+        fix: SIGNAL_CLI_FIX,
+      };
+    },
+    apply: async (ctx) => {
+      // Named before the download: a machine without Java cannot run what the
+      // step fetches, and the java step's fix is the right next move.
+      ctx.print(
+        "signal-cli needs Java 17 or newer (recent releases need the configured JDK; the java step checks it)",
+      );
+      const result = await installSignalCli({
+        dataDir: ctx.dataDir,
+        print: ctx.print,
+        ...(env.fetch ? { fetch: env.fetch } : {}),
+        ...(env.extract ? { extract: env.extract } : {}),
+      });
+      if (!result.downloaded) {
+        ctx.print(`signal-cli ${result.version} is already installed at ${result.path}`);
+      }
+    },
   };
 }
 

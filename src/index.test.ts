@@ -14,6 +14,7 @@ function builtEntry(): string {
     "src/daemon.ts",
     "src/cli/setup.ts",
     "src/cli/steps.ts",
+    "src/cli/signalCliInstall.ts",
     "src/cli/plugin.ts",
     "src/config/config.ts",
     "src/store/sqliteDriver.ts",
