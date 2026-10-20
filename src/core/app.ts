@@ -546,16 +546,10 @@ export class CoreApp {
       ...(typeof origin === "object" ? { voice: true } : {}),
     };
     const sessionId = this.store.getSession(project.id);
-    // The room hears the answer, not the prompt: a spoken question carries one
-    // instruction so the answer opens by naming the question as a native
-    // speaker would. The stored prompt stays the operator's own words.
-    const instruction =
-      typeof origin === "object" ? this.config.voice.answerInstruction.trim() : "";
-    const agentPrompt = instruction ? `${prompt}\n\n[${instruction}]` : prompt;
     const started = await this.agent.startTask({
       taskId: task.id,
       project,
-      prompt: agentPrompt,
+      prompt,
       ...(sessionId ? { sessionId } : {}),
     });
     task.sessionId = started.sessionId;

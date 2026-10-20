@@ -2065,7 +2065,6 @@ describe("voice in the meeting", () => {
     expect(spoken).toBe("it handles quotes");
     // The question is named by the model, not by a template around the clip.
     expect(spoken).not.toContain("Відповідь на");
-    expect(ctx.agent.started.at(-1)?.prompt).toContain("Answer in Ukrainian");
     await ctx.app.stop();
   });
 
