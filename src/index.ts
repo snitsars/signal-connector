@@ -137,13 +137,16 @@ async function main(): Promise<void> {
     (await secrets.get("transcription-api-key")) ??
     process.env.TRANSCRIPTION_API_KEY ??
     "";
+  const ttsKey = (await secrets.get("tts-api-key")) ?? process.env.TTS_API_KEY ?? "";
   logger.info("voice: transcriber", { kind: config.voice.transcriber });
+  logger.info("voice: synthesizer", { kind: config.voice.synthesizer });
 
   voice = new BrowserVoice({
     config: config.voice,
     logger,
     workDir: voiceDir,
     ...(transcriptionKey ? { transcriptionKey } : {}),
+    ...(ttsKey ? { ttsKey } : {}),
     // Speech goes back into the room's own synthetic microphone, over the CDP
     // session the meeting already has open.
     sink: {

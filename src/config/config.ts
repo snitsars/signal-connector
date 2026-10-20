@@ -72,6 +72,13 @@ export const ConfigSchema = z.object({
       piperVoicePath: z.string().default(""),
     /** Piper's speaking pace; 1 is the model's own, higher is slower. */
     piperLengthScale: z.number().positive().default(1.0),
+    /** Which voice: auto (Piper if fetched, else SAPI), piper, sapi or http. */
+    synthesizer: z.enum(["auto", "piper", "sapi", "http"]).default("auto"),
+    /** OpenAI-compatible /v1/audio/speech endpoint and its settings. */
+    ttsUrl: z.string().default(""),
+    ttsModel: z.string().default("gpt-4o-mini-tts"),
+    ttsVoice: z.string().default("alloy"),
+    ttsFormat: z.enum(["wav", "mp3"]).default("wav"),
     /** Which recogniser to use: auto (sherpa, else whisper), or a forced one. */
     transcriber: z.enum(["auto", "whisper", "sherpa", "http", "nvidia"]).default("auto"),
     /** NVIDIA Riva gRPC host and the hosted whisper-large-v3 function. */

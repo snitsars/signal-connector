@@ -38,6 +38,7 @@ import { SapiSynthesizer, type Synthesizer } from "./sapi.js";
 import { PiperSynthesizer } from "./piper.js";
 import { SherpaTranscriber } from "./sherpa.js";
 import { HttpTranscriber } from "./httpTranscriber.js";
+import { HttpSynthesizer } from "./httpSynthesizer.js";
 import { RivaTranscriber } from "./riva.js";
 import { normalizeSamples, pcmToWav } from "./wav.js";
 import {
@@ -132,6 +133,8 @@ export interface BrowserVoiceOptions {
   sink?: SpeechSink;
   /** The hosted transcription key, resolved from the secret store by index.ts. */
   transcriptionKey?: string;
+  /** The hosted speech key, resolved from the secret store by index.ts. */
+  ttsKey?: string;
 }
 
 /** One listening session: the accumulated audio between two cuts. */
@@ -188,22 +191,31 @@ export class BrowserVoice implements VoicePort {
     this.workDir = options.workDir;
     this.synthesizer =
       options.synthesizer ??
-      (options.config.piperPath.trim() && options.config.piperVoicePath.trim()
-        ? new PiperSynthesizer({
-            command: options.config.piperPath,
-            voicePath: options.config.piperVoicePath,
-            lengthScale: options.config.piperLengthScale,
+      (this.synthChoice() === "http"
+        ? new HttpSynthesizer({
+            url: options.config.ttsUrl,
+            model: options.config.ttsModel,
+            voice: options.config.ttsVoice,
+            format: options.config.ttsFormat,
+            apiKey: options.ttsKey ?? "",
             workDir: options.workDir,
-            // A 600-character answer is roughly a minute of speech, and Piper
-            // runs slower than real time; the old 20 s cap timed out on real
-            // answers and left the room in silence.
-            timeoutMs: 90_000,
           })
-        : new SapiSynthesizer({
-            workDir: options.workDir,
-            rate: options.config.rate,
-            voiceName: options.config.voiceName,
-          }));
+        : this.synthChoice() === "piper"
+          ? new PiperSynthesizer({
+              command: options.config.piperPath,
+              voicePath: options.config.piperVoicePath,
+              lengthScale: options.config.piperLengthScale,
+              workDir: options.workDir,
+              // A 600-character answer is roughly a minute of speech, and Piper
+              // runs slower than real time; the old 20 s cap timed out on real
+              // answers and left the room in silence.
+              timeoutMs: 90_000,
+            })
+          : new SapiSynthesizer({
+              workDir: options.workDir,
+              rate: options.config.rate,
+              voiceName: options.config.voiceName,
+            }));
     this.sink = options.sink;
     // The operator picks the recogniser; "auto" keeps the local default and
     // never sends audio anywhere. A hosted endpoint is used only when asked for,
@@ -240,6 +252,17 @@ export class BrowserVoice implements VoicePort {
               ...(options.config.language ? { language: options.config.language } : {}),
               logger: options.logger,
             }));
+  }
+
+  /** Pick the configured voice; "auto" keeps the best local one. */
+  private synthChoice(): "http" | "piper" | "sapi" {
+    const choice = this.config.synthesizer;
+    if (choice === "http") return "http";
+    if (choice === "piper") return "piper";
+    if (choice === "sapi") return "sapi";
+    return this.config.piperPath.trim() && this.config.piperVoicePath.trim()
+      ? "piper"
+      : "sapi";
   }
 
   /** How many utterances were dropped: a blank transcript or a failed run. */

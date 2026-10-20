@@ -67,6 +67,15 @@ bargeInMs = 400                # sustained speech before the answer is stopped
 voiceName = ""                 # Windows system voice; "" picks the default
 rate = 0                       # speaking rate, -10..10 (0 is the voice's pace)
 maxSpeechChars = 600           # longest answer spoken aloud; the group keeps it all
+# Which voice: auto (Piper if fetched, else the Windows voice), piper, sapi or
+# http. "http" calls an OpenAI-compatible /v1/audio/speech endpoint and needs
+# the tts-api-key secret (or TTS_API_KEY in the environment); the answer text
+# then leaves the machine.
+synthesizer = "auto"
+# ttsUrl = 'https://api.openai.com/v1/audio/speech'
+# ttsModel = "gpt-4o-mini-tts"
+# ttsVoice = "alloy"
+# ttsFormat = "wav"             # "wav" or "mp3"
 
 # The meeting's own budgets (optional). Presence is advisory and never a gate.
 # The deaf alarm posts once per silence spell; the watchdog closes an admitted
