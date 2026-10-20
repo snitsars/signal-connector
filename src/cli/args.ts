@@ -4,13 +4,15 @@
  * composition root (`src/index.ts`) turns the mode into behaviour.
  */
 
-export type CliMode = "daemon" | "version" | "help" | "usage";
+export type CliMode = "daemon" | "doctor" | "setup" | "version" | "help" | "usage";
 
 export const USAGE = [
   "signal-connector — bridge a Signal chat to a local opencode coding agent",
   "",
   "Usage:",
   "  signal-connector                 start the daemon (default)",
+  "  signal-connector doctor          report whether this machine is ready (read-only)",
+  "  signal-connector setup           prepare this machine, skipping what is already ready",
   "  signal-connector -v, --version   print the package version and exit",
   "  signal-connector -h, --help      print this help and exit",
   "",
@@ -27,6 +29,9 @@ export const USAGE = [
 export function parseArgs(argv: readonly string[]): CliMode {
   const [first] = argv;
   if (first === undefined) return "daemon";
+  // These modes take no options: `setup --help` must not install anything.
+  if (first === "doctor") return argv.length === 1 ? "doctor" : "usage";
+  if (first === "setup") return argv.length === 1 ? "setup" : "usage";
   if (first === "--version" || first === "-v") return "version";
   if (first === "--help" || first === "-h") return "help";
   return "usage";

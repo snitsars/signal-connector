@@ -1,0 +1,198 @@
+/**
+ * The shared setup contract. A `SetupStep` is one checkable prerequisite:
+ * `doctor` only reports it, `setup` also applies it when it is missing.
+ *
+ * Both runners are pure apart from the print sink they are given: they never
+ * touch config, the store, the secret store or the daemon, so a diagnostic can
+ * never change the machine it describes. Each returns the exit code; only the
+ * composition root (`src/index.ts`) calls `process.exit`.
+ */
+export type StepStatus = "ok" | "missing" | "failed";
+
+/** The one-line result of checking a step. `fix` is the exact thing to do. */
+export interface StepReport {
+  status: StepStatus;
+  reason: string;
+  fix?: string;
+}
+
+/** What a step may use while it runs. Deliberately no config, no store. */
+export interface StepContext {
+  /** Writes one progress line through the runner's sink. */
+  print(line: string): void;
+}
+
+export interface SetupStep {
+  /** Stable, human-readable id; the registry order is the run order. */
+  readonly id: string;
+  readonly title: string;
+  check(ctx: StepContext): StepReport | Promise<StepReport>;
+  /** Omitted when the step cannot be fixed automatically (e.g. Node itself). */
+  apply?(ctx: StepContext): void | Promise<void>;
+}
+
+export type Print = (line: string) => void;
+
+const STATUS_WIDTH = 7;
+const ID_WIDTH = 14;
+
+function pad(text: string, width: number): string {
+  return text.length >= width ? text : text + " ".repeat(width - text.length);
+}
+
+/** Reports must stay one line even when a shell or network error is multi-line. */
+function oneLine(text: string): string {
+  return text.replace(/\s*\r?\n\s*/g, " ").trim();
+}
+
+function reasonOf(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  const reason = oneLine(text);
+  return reason.length > 0 ? reason : "unknown error";
+}
+
+/**
+ * Prints one report line. `label` defaults to the report's status so a caller
+ * can say "failed" for a missing step that could not be repaired.
+ */
+export function printReport(
+  step: SetupStep,
+  report: StepReport,
+  print: Print,
+  label: string = report.status,
+): void {
+  const fix = report.fix ? ` — fix: ${oneLine(report.fix)}` : "";
+  print(`${pad(label, STATUS_WIDTH)} ${pad(step.id, ID_WIDTH)} ${oneLine(report.reason)}${fix}`);
+}
+
+async function checkStep(step: SetupStep, ctx: StepContext): Promise<StepReport> {
+  try {
+    return await step.check(ctx);
+  } catch (err: unknown) {
+    // A throwing check is a failed step, not a crash: the other steps still run.
+    return { status: "failed", reason: reasonOf(err) };
+  }
+}
+
+/**
+ * Read-only: checks every step in registry order and exits non-zero when any
+ * step is missing or failed. Nothing is applied and nothing is written.
+ */
+export async function runDoctor(steps: readonly SetupStep[], print: Print): Promise<number> {
+  if (steps.length === 0) {
+    print("no setup steps are registered.");
+    return 0;
+  }
+
+  const ctx: StepContext = { print };
+  let healthy = true;
+  for (const step of steps) {
+    const report = await checkStep(step, ctx);
+    printReport(step, report, print);
+    if (report.status !== "ok") healthy = false;
+  }
+  return healthy ? 0 : 1;
+}
+
+/**
+ * Resumable and idempotent: satisfied steps are skipped, missing ones with an
+ * `apply` are applied and re-checked, and the run stops at the first failure so
+ * a rerun resumes exactly there.
+ */
+export async function runSetup(steps: readonly SetupStep[], print: Print): Promise<number> {
+  if (steps.length === 0) {
+    print("no setup steps are registered; nothing to do.");
+    return 0;
+  }
+
+  const ctx: StepContext = { print };
+  for (const step of steps) {
+    const before = await checkStep(step, ctx);
+    if (before.status === "ok") {
+      printReport(step, before, print, "skip");
+      continue;
+    }
+    if (before.status === "failed" || step.apply === undefined) {
+      printReport(step, before, print);
+      print(`setup stopped at "${step.id}"; fix it and run setup again.`);
+      return 1;
+    }
+
+    print(`apply   ${pad(step.id, ID_WIDTH)} ${step.title}`);
+    try {
+      await step.apply(ctx);
+    } catch (err: unknown) {
+      // Keep the check's fix: the apply error alone would leave the operator
+      // without the guidance that the step already knows.
+      printReport(
+        step,
+        { ...before, status: "failed", reason: `${before.reason} — apply failed: ${reasonOf(err)}` },
+        print,
+      );
+      print(`setup stopped at "${step.id}"; fix it and run setup again.`);
+      return 1;
+    }
+
+    // Trust the check, not the apply: a step that ran without error but left
+    // the prerequisite unmet is still a failure.
+    const after = await checkStep(step, ctx);
+    if (after.status !== "ok") {
+      printReport(step, after, print, "failed");
+      print(`setup stopped at "${step.id}"; fix it and run setup again.`);
+      return 1;
+    }
+    printReport(step, after, print);
+  }
+  print("setup: all steps satisfied.");
+  return 0;
+}
+
+/**
+ * The floor taken from `engines.node` in package.json. Kept as a constant so a
+ * check never reads the manifest; setup.test.ts fails if the two drift apart.
+ */
+export const NODE_FLOOR = "22.13.0";
+
+function versionParts(version: string): [number, number, number] {
+  const [major, minor, patch] = version
+    .split(".")
+    .map((part) => Number.parseInt(part, 10) || 0);
+  return [major ?? 0, minor ?? 0, patch ?? 0];
+}
+
+/** True when `actual` is at least `floor` (a plain dotted numeric version). */
+export function meetsNodeFloor(actual: string, floor: string = NODE_FLOOR): boolean {
+  const a = versionParts(actual);
+  const f = versionParts(floor);
+  for (let i = 0; i < 3; i++) {
+    const av = a[i] ?? 0;
+    const fv = f[i] ?? 0;
+    if (av !== fv) return av > fv;
+  }
+  return true;
+}
+
+/** The one prerequisite that already exists: the runtime doing the checking. */
+export const nodeVersionStep: SetupStep = {
+  id: "node-version",
+  title: "Node.js",
+  check: () => {
+    const version = process.versions.node;
+    if (meetsNodeFloor(version)) {
+      return { status: "ok", reason: `Node.js ${version} (needs >= ${NODE_FLOOR})` };
+    }
+    return {
+      status: "missing",
+      reason: `Node.js ${version} is older than ${NODE_FLOOR}`,
+      fix: `install Node.js ${NODE_FLOOR} or newer from https://nodejs.org/en/download`,
+    };
+  },
+};
+
+/**
+ * The ordered product registry. Later stories append their steps; order and ids
+ * are decisions in code, never something a half-written config could drop.
+ */
+export function registry(): readonly SetupStep[] {
+  return [nodeVersionStep];
+}

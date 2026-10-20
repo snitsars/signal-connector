@@ -3,7 +3,7 @@
 Control a local **opencode** coding agent from a **Signal** chat. One operator starts tasks,
 watches progress, approves permission prompts, and receives results — from their phone.
 
-Windows-first, cross-platform. TypeScript / ESM / Node ≥ 20.
+Windows-first, cross-platform. TypeScript / ESM / Node ≥ 22.13.
 
 ## Status
 
@@ -20,6 +20,21 @@ npm run dry                # interactive: type /open demo, /task ..., approve
 
 The dry run uses an in-memory store and console/scripted ports — no Signal or opencode needed.
 
+## Doctor and setup
+
+```bash
+npm run build
+node dist/index.js doctor   # report readiness — changes nothing
+node dist/index.js setup    # apply what is missing — safe to re-run
+```
+
+`doctor` runs every registered check and prints one line per step (`ok`, `missing`, `failed`, with
+the exact fix where there is one), exiting non-zero if anything is missing or failed. It never
+writes a config, creates the data directory, constructs the secret store or opens the daemon.
+`setup` walks the same registry in the same order, skips steps that already pass, applies the rest
+and stops at the first failure, so a rerun resumes from there. The registry currently holds the
+Node floor (>= 22.13); later stories add signal-cli, the device link and the plugin.
+
 ## Architecture
 
 Ports & adapters (hexagonal). `src/core/` depends only on `SignalPort` / `AgentPort`; adapters
@@ -35,7 +50,7 @@ src/
     fakes/    in-memory ports for tests
   store/      SQLite
   config/     config.toml loader, DPAPI secrets
-  cli/        link, dry-run
+  cli/        args, setup (doctor/setup), link, dry-run
 ```
 
 ## Integration modes
@@ -319,7 +334,7 @@ rendered to Signal. Approvals are answered from Signal and relayed to the plugin
 
 ## Host setup (Windows, scripted)
 
-Prerequisites: Windows 10+, Node ≥ 20. The scripts install the rest.
+Prerequisites: Windows 10+, Node ≥ 22.13. The scripts install the rest.
 
 ```powershell
 # 1. Java 25 + signal-cli + config.toml, with next steps printed
