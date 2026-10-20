@@ -239,6 +239,57 @@ export function configPath(dir = dataDir()): string {
   return path.join(dir, "config.toml");
 }
 
+/** The outcome of reading a config file without changing anything on disk. */
+export type ReadConfigResult =
+  | { ok: true; config: Config }
+  | { ok: false; absent: boolean; reason: string };
+
+/** Reports must stay one line even when a parser error is multi-line. */
+function oneLine(text: string): string {
+  return text.replace(/\s*\r?\n\s*/g, " ").trim();
+}
+
+function reasonOf(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  const reason = oneLine(text);
+  return reason.length > 0 ? reason : "unknown error";
+}
+
+/**
+ * Read-only counterpart to `loadConfig` for `doctor`: it never creates the data
+ * directory, never writes a default config and never returns a half-parsed
+ * value. Callers get either a validated config or one line saying why not.
+ */
+export function readConfig(dir = dataDir()): ReadConfigResult {
+  const file = configPath(dir);
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch (err: unknown) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      return { ok: false, absent: true, reason: `config.toml not found in ${dir}` };
+    }
+    return { ok: false, absent: false, reason: `cannot read ${file}: ${reasonOf(err)}` };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parse(raw);
+  } catch (err: unknown) {
+    return { ok: false, absent: false, reason: `config.toml is not valid TOML: ${reasonOf(err)}` };
+  }
+
+  const result = ConfigSchema.safeParse(parsed);
+  if (!result.success) {
+    const details = result.error.issues
+      .map((issue) => `${issue.path.join(".") || "config"}: ${issue.message}`)
+      .join("; ");
+    return { ok: false, absent: false, reason: `config.toml is invalid: ${oneLine(details)}` };
+  }
+  return { ok: true, config: result.data };
+}
+
 export function loadConfig(dir = dataDir()): Config {
   fs.mkdirSync(dir, { recursive: true });
   const file = configPath(dir);

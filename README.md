@@ -32,8 +32,14 @@ node dist/index.js setup    # apply what is missing — safe to re-run
 the exact fix where there is one), exiting non-zero if anything is missing or failed. It never
 writes a config, creates the data directory, constructs the secret store or opens the daemon.
 `setup` walks the same registry in the same order, skips steps that already pass, applies the rest
-and stops at the first failure, so a rerun resumes from there. The registry currently holds the
-Node floor (>= 22.13); later stories add signal-cli, the device link and the plugin.
+and stops at the first failure, so a rerun resumes from there.
+
+The registry checks, in order: the Node floor (>= 22.13), Java (the configured JDK or `java` on
+PATH), signal-cli (the configured `signal.command`/`signal.cliPath` or PATH), opencode (the
+configured `agent.opencodePath` or PATH), the data directory, `config.toml` (present and valid,
+read without creating anything), and the secret store (PowerShell 7 for DPAPI on Windows, an
+in-memory store elsewhere). The daemon runs the same registry before it opens the store, starts
+signal-cli or launches a browser; if any step is missing it prints those lines and exits 1.
 
 ## Architecture
 

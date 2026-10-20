@@ -13,6 +13,8 @@ function builtEntry(): string {
     "src/index.ts",
     "src/daemon.ts",
     "src/cli/setup.ts",
+    "src/cli/steps.ts",
+    "src/config/config.ts",
     "src/store/sqliteDriver.ts",
   ].map((file) => path.join(root, file));
   const stale =

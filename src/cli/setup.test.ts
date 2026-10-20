@@ -11,6 +11,7 @@ import {
   runSetup,
   type Print,
   type SetupStep,
+  type StepContext,
   type StepReport,
 } from "./setup.js";
 
@@ -24,7 +25,12 @@ function sink(): { print: Print; output: string[] } {
   return { output, print: (line) => output.push(line) };
 }
 
-const ctx = { print: (): void => {} };
+/** The contract needs a data directory even when a test's steps ignore it. */
+function contextOf(print: Print, dataDir: string = os.tmpdir()): StepContext {
+  return { print, dataDir };
+}
+
+const ctx: StepContext = { print: (): void => {}, dataDir: os.tmpdir() };
 
 /** Every file and directory under `root`, with size, mtime and contents. */
 function snapshot(root: string): string[] {
@@ -57,7 +63,7 @@ describe("runDoctor", () => {
         stepOf("alpha", () => ({ status: "ok", reason: "fine" })),
         stepOf("beta", () => ({ status: "ok", reason: "also fine" })),
       ],
-      print,
+      contextOf(print),
     );
 
     expect(code).toBe(0);
@@ -80,7 +86,7 @@ describe("runDoctor", () => {
         })),
         stepOf("later", () => ({ status: "ok", reason: "ready too" })),
       ],
-      print,
+      contextOf(print),
     );
 
     expect(code).toBe(1);
@@ -100,7 +106,7 @@ describe("runDoctor", () => {
         }),
         stepOf("after", () => ({ status: "ok", reason: "fine" })),
       ],
-      print,
+      contextOf(print),
     );
 
     expect(code).toBe(1);
@@ -112,7 +118,7 @@ describe("runDoctor", () => {
 
   it("reports an empty registry without failing", async () => {
     const { print, output } = sink();
-    const code = await runDoctor([], print);
+    const code = await runDoctor([], contextOf(print));
 
     expect(code).toBe(0);
     expect(output).toHaveLength(1);
@@ -128,8 +134,8 @@ describe("runDoctor", () => {
     const first = sink();
     const second = sink();
 
-    expect(await runDoctor([step], first.print)).toBe(0);
-    expect(await runDoctor([step], second.print)).toBe(0);
+    expect(await runDoctor([step], contextOf(first.print))).toBe(0);
+    expect(await runDoctor([step], contextOf(second.print))).toBe(0);
     expect(first.output).toEqual(second.output);
     expect(checks).toBe(2);
   });
@@ -153,7 +159,7 @@ describe("runDoctor", () => {
           stepOf("ready", () => ({ status: "ok", reason: "fine" }), write),
           stepOf("absent", () => ({ status: "missing", reason: "absent", fix: "install it" }), write),
         ],
-        print,
+        contextOf(print),
       );
 
       expect(code).toBe(1);
@@ -173,7 +179,7 @@ describe("runSetup", () => {
     let applied = 0;
     const code = await runSetup(
       [stepOf("ready", () => ({ status: "ok", reason: "already fine" }), () => applied++)],
-      print,
+      contextOf(print),
     );
 
     expect(code).toBe(0);
@@ -196,14 +202,14 @@ describe("runSetup", () => {
     );
 
     const first = sink();
-    expect(await runSetup([step], first.print)).toBe(0);
+    expect(await runSetup([step], contextOf(first.print))).toBe(0);
     expect(applied).toBe(1);
     expect(first.output[0]).toContain("apply");
     expect(first.output[1]).toContain("ok");
     expect(first.output[1]).toContain("installed");
 
     const second = sink();
-    expect(await runSetup([step], second.print)).toBe(0);
+    expect(await runSetup([step], contextOf(second.print))).toBe(0);
     expect(applied).toBe(1);
     expect(second.output[0]).toContain("skip");
     expect(second.output.some((line) => line.startsWith("apply"))).toBe(false);
@@ -228,7 +234,7 @@ describe("runSetup", () => {
     ];
 
     const first = sink();
-    expect(await runSetup(steps, first.print)).toBe(1);
+    expect(await runSetup(steps, contextOf(first.print))).toBe(1);
     expect(applied).toEqual([]);
     expect(first.output.some((line) => line.includes("installer unavailable"))).toBe(true);
     expect(first.output.some((line) => line.includes('setup stopped at "three"'))).toBe(true);
@@ -236,7 +242,7 @@ describe("runSetup", () => {
 
     installerFails = false;
     const second = sink();
-    expect(await runSetup(steps, second.print)).toBe(0);
+    expect(await runSetup(steps, contextOf(second.print))).toBe(0);
     expect(applied).toEqual(["three"]);
     expect(second.output[0]).toContain("skip");
     expect(second.output[1]).toContain("skip");
@@ -255,7 +261,7 @@ describe("runSetup", () => {
           },
         ),
       ],
-      print,
+      contextOf(print),
     );
 
     expect(code).toBe(1);
@@ -281,7 +287,7 @@ describe("runSetup", () => {
           return { status: "ok", reason: "fine" };
         }),
       ],
-      print,
+      contextOf(print),
     );
 
     expect(code).toBe(1);
@@ -300,7 +306,7 @@ describe("runSetup", () => {
           () => {},
         ),
       ],
-      print,
+      contextOf(print),
     );
 
     expect(code).toBe(1);
@@ -323,7 +329,7 @@ describe("runSetup", () => {
           () => applied++,
         ),
       ],
-      print,
+      contextOf(print),
     );
 
     expect(code).toBe(1);
@@ -334,15 +340,23 @@ describe("runSetup", () => {
 
   it("reports an empty registry and exits 0", async () => {
     const { print, output } = sink();
-    expect(await runSetup([], print)).toBe(0);
+    expect(await runSetup([], contextOf(print))).toBe(0);
     expect(output[0]).toContain("no setup steps are registered");
   });
 });
 
 describe("registry", () => {
-  it("starts with the Node step, in a stable order with unique ids", () => {
+  it("lists every prerequisite in a stable order with unique ids", () => {
     const steps = registry();
-    expect(steps.map((step) => step.id)).toEqual(["node-version"]);
+    expect(steps.map((step) => step.id)).toEqual([
+      "node-version",
+      "java",
+      "signal-cli",
+      "opencode",
+      "data-directory",
+      "config",
+      "secrets",
+    ]);
     expect(new Set(steps.map((step) => step.id)).size).toBe(steps.length);
   });
 

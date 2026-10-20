@@ -4,6 +4,7 @@
  * branch only, so `--version`, `--help`, doctor and setup never evaluate it —
  * below the Node floor `node:sqlite` cannot even be resolved.
  */
+import { writeSync } from "node:fs";
 import path from "node:path";
 import { createAgentAdapter } from "./adapters/agent/factory.js";
 import { ProjectLaunchers } from "./adapters/launcher/registry.js";
@@ -13,14 +14,27 @@ import { SignalCliClient } from "./adapters/signal/signalCliClient.js";
 import { BrowserVoice } from "./adapters/voice/browserVoice.js";
 import { BridgeHub } from "./bridge/hub.js";
 import { startBridgeServer } from "./bridge/server.js";
-import { dataDir, loadConfig } from "./config/config.js";
+import { registry, runDoctor, stepContext } from "./cli/setup.js";
+import { dataDir, loadConfig, readConfig } from "./config/config.js";
 import { defaultSecretStore } from "./config/secrets.js";
 import { CoreApp } from "./core/app.js";
 import { createLogger } from "./logging/logger.js";
 import { openStore } from "./store/store.js";
 
-export async function runDaemon(): Promise<void> {
+export async function runDaemon(): Promise<number> {
   const dir = dataDir();
+
+  // Same registry and same lines as doctor, before the logger, store, daemon or
+  // browser exists: a missing prerequisite is a refusal, never a late crash.
+  const preflight = await runDoctor(
+    registry(),
+    stepContext(dir, readConfig(dir), (line) => writeSync(1, `${line}\n`)),
+  );
+  if (preflight !== 0) {
+    writeSync(1, "SignalConnector is not ready; fix the steps above and start again.\n");
+    return 1;
+  }
+
   const config = loadConfig(dir);
   const logger = createLogger({
     level: (process.env.LOG_LEVEL as "debug" | "info" | "warn" | "error") ?? "info",
@@ -173,4 +187,5 @@ export async function runDaemon(): Promise<void> {
   };
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
+  return 0;
 }

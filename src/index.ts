@@ -8,7 +8,7 @@
  */
 import { readFileSync, writeSync } from "node:fs";
 import { parseArgs, USAGE } from "./cli/args.js";
-import { registry, runDoctor, runSetup } from "./cli/setup.js";
+import { registry, runDoctor, runSetup, stepContext } from "./cli/setup.js";
 
 /** Reads the version from the manifest beside the build output (and the sources). */
 function packageVersion(): string {
@@ -39,8 +39,17 @@ if (mode === "version") {
 } else if (mode === "doctor" || mode === "setup") {
   // Before the daemon import: doctor must stay read-only, so no config, data
   // directory, secret store, store or daemon may be touched on this path.
+  // Config is imported dynamically to keep the static graph tiny; readConfig
+  // reports absent/invalid without ever writing.
   const runner = mode === "doctor" ? runDoctor : runSetup;
-  runner(registry(), (line) => print(1, line))
+  import("./config/config.js")
+    .then(({ dataDir, readConfig }) => {
+      const dir = dataDir();
+      return runner(
+        registry(),
+        stepContext(dir, readConfig(dir), (line) => print(1, line)),
+      );
+    })
     .then((code) => process.exit(code))
     .catch((err: unknown) => {
       print(2, `fatal: ${String(err)}`);
@@ -52,6 +61,10 @@ if (mode === "version") {
 } else {
   import("./daemon.js")
     .then(({ runDaemon }) => runDaemon())
+    .then((code) => {
+      // A daemon that got past preflight keeps running; only a refusal exits.
+      if (code !== 0) process.exit(code);
+    })
     .catch((err: unknown) => {
       process.stderr.write(`fatal: ${String(err)}\n`);
       process.exit(1);

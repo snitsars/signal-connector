@@ -7,6 +7,15 @@
  * never change the machine it describes. Each returns the exit code; only the
  * composition root (`src/index.ts`) calls `process.exit`.
  */
+import {
+  configStep,
+  dataDirStep,
+  javaStep,
+  opencodeStep,
+  secretsStep,
+  signalCliStep,
+} from "./steps.js";
+
 export type StepStatus = "ok" | "missing" | "failed";
 
 /** The one-line result of checking a step. `fix` is the exact thing to do. */
@@ -16,10 +25,49 @@ export interface StepReport {
   fix?: string;
 }
 
-/** What a step may use while it runs. Deliberately no config, no store. */
+/**
+ * The config fields the prerequisite steps read. The loader's full `Config` is
+ * assignable to it, so `setup.ts` never imports config or touches disk.
+ */
+export interface SetupConfig {
+  signal: {
+    cliPath: string;
+    command?: string[];
+  };
+  agent: {
+    opencodePath: string;
+  };
+}
+
+/** Why there is no usable config: absent is a setup problem, invalid is not. */
+export interface ConfigProblem {
+  absent: boolean;
+  reason: string;
+}
+
+/** The read-only outcome `readConfig` produces, structurally. */
+export type ConfigRead =
+  | { ok: true; config: SetupConfig }
+  | { ok: false; absent: boolean; reason: string };
+
+/** What a step may use while it runs. Deliberately no store and no side effects. */
 export interface StepContext {
   /** Writes one progress line through the runner's sink. */
   print(line: string): void;
+  /** The data directory the daemon would use; steps never create it. */
+  dataDir: string;
+  /** Present only when config.toml exists and validates. */
+  config?: SetupConfig;
+  /** Present only when config.toml is absent or invalid. */
+  configProblem?: ConfigProblem;
+}
+
+/** Composes the context once, so doctor/setup and the daemon agree on it. */
+export function stepContext(dataDir: string, read: ConfigRead, print: Print): StepContext {
+  if (read.ok) {
+    return { print, dataDir, config: read.config };
+  }
+  return { print, dataDir, configProblem: { absent: read.absent, reason: read.reason } };
 }
 
 export interface SetupStep {
@@ -78,17 +126,16 @@ async function checkStep(step: SetupStep, ctx: StepContext): Promise<StepReport>
  * Read-only: checks every step in registry order and exits non-zero when any
  * step is missing or failed. Nothing is applied and nothing is written.
  */
-export async function runDoctor(steps: readonly SetupStep[], print: Print): Promise<number> {
+export async function runDoctor(steps: readonly SetupStep[], ctx: StepContext): Promise<number> {
   if (steps.length === 0) {
-    print("no setup steps are registered.");
+    ctx.print("no setup steps are registered.");
     return 0;
   }
 
-  const ctx: StepContext = { print };
   let healthy = true;
   for (const step of steps) {
     const report = await checkStep(step, ctx);
-    printReport(step, report, print);
+    printReport(step, report, ctx.print);
     if (report.status !== "ok") healthy = false;
   }
   return healthy ? 0 : 1;
@@ -99,13 +146,13 @@ export async function runDoctor(steps: readonly SetupStep[], print: Print): Prom
  * `apply` are applied and re-checked, and the run stops at the first failure so
  * a rerun resumes exactly there.
  */
-export async function runSetup(steps: readonly SetupStep[], print: Print): Promise<number> {
+export async function runSetup(steps: readonly SetupStep[], ctx: StepContext): Promise<number> {
   if (steps.length === 0) {
-    print("no setup steps are registered; nothing to do.");
+    ctx.print("no setup steps are registered; nothing to do.");
     return 0;
   }
 
-  const ctx: StepContext = { print };
+  const { print } = ctx;
   for (const step of steps) {
     const before = await checkStep(step, ctx);
     if (before.status === "ok") {
@@ -194,5 +241,13 @@ export const nodeVersionStep: SetupStep = {
  * are decisions in code, never something a half-written config could drop.
  */
 export function registry(): readonly SetupStep[] {
-  return [nodeVersionStep];
+  return [
+    nodeVersionStep,
+    javaStep(),
+    signalCliStep(),
+    opencodeStep(),
+    dataDirStep(),
+    configStep(),
+    secretsStep(),
+  ];
 }
