@@ -12,6 +12,7 @@
  * rewrites one. It only fills the empty first run, and it does that with the
  * linked number `finishLink` returned — never a guess.
  */
+import { oneLine } from "../oneLine.js";
 import fs from "node:fs";
 import path from "node:path";
 import { installedCopies } from "./signalCliInstall.js";
@@ -52,10 +53,6 @@ export interface InitialConfigResult {
   path: string;
   /** False when a config already existed and was left byte-identical. */
   written: boolean;
-}
-
-function oneLine(text: string): string {
-  return text.replace(/\s*\r?\n\s*/g, " ").trim();
 }
 
 /**

@@ -2,6 +2,7 @@
  * Config loader (spine AD-9). Non-secret config lives in
  * %APPDATA%/SignalConnector/config.toml, created with defaults on first run.
  */
+import { oneLine } from "../oneLine.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -245,10 +246,6 @@ export type ReadConfigResult =
   | { ok: false; absent: boolean; reason: string };
 
 /** Reports must stay one line even when a parser error is multi-line. */
-function oneLine(text: string): string {
-  return text.replace(/\s*\r?\n\s*/g, " ").trim();
-}
-
 function reasonOf(err: unknown): string {
   const text = err instanceof Error ? err.message : String(err);
   const reason = oneLine(text);

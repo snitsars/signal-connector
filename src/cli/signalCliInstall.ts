@@ -15,6 +15,7 @@
  * No helper exits the process: each returns its result or throws one reason,
  * and the setup step turns that into a report.
  */
+import { oneLine } from "../oneLine.js";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -90,11 +91,6 @@ export interface SignalCliInstallOptions {
 }
 
 /** A reason on one line, as every report and failure must be. */
-function oneLine(err: unknown): string {
-  const text = err instanceof Error ? err.message : String(err);
-  return text.replace(/\s*\r?\n\s*/g, " ").trim() || "unknown error";
-}
-
 /** Numeric dotted comparison, so `0.14.10` is newer than `0.14.9`. */
 function versionParts(version: string): number[] {
   return version.split(".").map((part) => Number.parseInt(part, 10) || 0);

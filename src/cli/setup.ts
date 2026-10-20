@@ -7,6 +7,7 @@
  * never change the machine it describes. Each returns the exit code; only the
  * composition root (`src/index.ts`) calls `process.exit`.
  */
+import { oneLine } from "../oneLine.js";
 import os from "node:os";
 import { linkStep } from "./configure.js";
 import { installPlugin, packageRoot, pluginStatus, type PluginPaths } from "./plugin.js";
@@ -94,10 +95,6 @@ function pad(text: string, width: number): string {
 }
 
 /** Reports must stay one line even when a shell or network error is multi-line. */
-function oneLine(text: string): string {
-  return text.replace(/\s*\r?\n\s*/g, " ").trim();
-}
-
 function reasonOf(err: unknown): string {
   const text = err instanceof Error ? err.message : String(err);
   const reason = oneLine(text);

@@ -8,6 +8,7 @@
  * Command steps take their runner as an argument, so tests can prove the
  * classification and the guidance without Java, signal-cli or opencode.
  */
+import { oneLine } from "../oneLine.js";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -40,10 +41,6 @@ export interface CommandResult {
 
 /** Stubbable command runner: the argv includes the executable as argv[0]. */
 export type RunCommand = (argv: readonly string[]) => CommandResult;
-
-function oneLine(text: string): string {
-  return text.replace(/\s*\r?\n\s*/g, " ").trim();
-}
 
 function firstLine(text: string): string {
   for (const line of text.split(/\r?\n/)) {

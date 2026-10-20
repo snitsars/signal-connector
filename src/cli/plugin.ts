@@ -14,6 +14,7 @@
  * No helper exits the process: each returns its outcome (or throws one clear
  * reason for a broken package) and `src/index.ts` prints it and owns the code.
  */
+import { oneLine } from "../oneLine.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,11 +78,6 @@ export interface PluginInstall {
 }
 
 /** Reports stay one line even when a filesystem error is multi-line. */
-function oneLine(err: unknown): string {
-  const text = err instanceof Error ? err.message : String(err);
-  return text.replace(/\s*\r?\n\s*/g, " ").trim() || "unknown error";
-}
-
 /**
  * The bytes at `file`, or undefined when it does not exist. Any other failure is
  * a real problem (a directory in its place, a denied read) and is rethrown with
