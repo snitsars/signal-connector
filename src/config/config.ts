@@ -73,7 +73,12 @@ export const ConfigSchema = z.object({
     /** Piper's speaking pace; 1 is the model's own, higher is slower. */
     piperLengthScale: z.number().positive().default(1.0),
     /** Which recogniser to use: auto (sherpa, else whisper), or a forced one. */
-    transcriber: z.enum(["auto", "whisper", "sherpa", "http"]).default("auto"),
+    transcriber: z.enum(["auto", "whisper", "sherpa", "http", "nvidia"]).default("auto"),
+    /** NVIDIA Riva gRPC host and the hosted whisper-large-v3 function. */
+    rivaHost: z.string().default("grpc.nvcf.nvidia.com:443"),
+    rivaFunctionId: z.string().default("b702f636-f60c-4a3d-a6f4-f3568c13bd7d"),
+    /** Riva language code; Ukrainian is uk-UA. */
+    rivaLanguage: z.string().default("uk-UA"),
     /** OpenAI-compatible /v1/audio/transcriptions endpoint; `${model}` not needed. */
     httpTranscriptionUrl: z.string().default(""),
     /** Model field sent to that endpoint, e.g. openai/whisper-large-v3. */

@@ -38,10 +38,15 @@ opencodePath = "opencode"
 # piperVoicePath = 'C:\Users\you\AppData\Local\SignalConnector\piper\voices\uk_UA-oleksa-high.onnx'
 language = "auto"              # pin the language you speak; "auto" misfires on short clips
 # Which recogniser to use: auto (sherpa if configured, else whisper), or force
-# whisper | sherpa | http. "http" sends each utterance to an OpenAI-compatible
-# /v1/audio/transcriptions endpoint and needs the transcription-api-key secret
-# (or TRANSCRIPTION_API_KEY in the environment) — audio leaves the machine.
+# whisper | sherpa | http | nvidia. "http" sends each utterance to an
+# OpenAI-compatible /v1/audio/transcriptions endpoint; "nvidia" uses NVIDIA's
+# hosted whisper-large-v3 over Riva gRPC (grpc.nvcf.nvidia.com, function id
+# below). Both hosted choices need the transcription-api-key secret (or
+# TRANSCRIPTION_API_KEY in the environment) and send audio off the machine.
 transcriber = "auto"
+# rivaHost = "grpc.nvcf.nvidia.com:443"
+# rivaFunctionId = "b702f636-f60c-4a3d-a6f4-f3568c13bd7d"
+# rivaLanguage = "uk-UA"
 # httpTranscriptionUrl = 'http://127.0.0.1:8000/v1/audio/transcriptions'
 # httpTranscriptionModel = "openai/whisper-large-v3"
 # httpTranscriptionLanguage = "uk"

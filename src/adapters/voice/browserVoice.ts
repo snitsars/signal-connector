@@ -38,6 +38,7 @@ import { SapiSynthesizer, type Synthesizer } from "./sapi.js";
 import { PiperSynthesizer } from "./piper.js";
 import { SherpaTranscriber } from "./sherpa.js";
 import { HttpTranscriber } from "./httpTranscriber.js";
+import { RivaTranscriber } from "./riva.js";
 import { normalizeSamples, pcmToWav } from "./wav.js";
 import {
   WhisperTranscriber,
@@ -210,9 +211,17 @@ export class BrowserVoice implements VoicePort {
     const choice = options.config.transcriber;
     const local = choice === "sherpa" || (choice === "auto" && !!options.config.sherpaPath && !!options.config.sherpaModelDir);
     const hosted = choice === "http";
+    const nvidia = choice === "nvidia";
     this.transcriber =
       options.transcriber ??
-      (hosted
+      (nvidia
+        ? new RivaTranscriber({
+            host: options.config.rivaHost,
+            functionId: options.config.rivaFunctionId,
+            language: options.config.rivaLanguage,
+            apiKey: options.transcriptionKey ?? "",
+          })
+        : hosted
         ? new HttpTranscriber({
             url: options.config.httpTranscriptionUrl,
             model: options.config.httpTranscriptionModel,
