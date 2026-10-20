@@ -3,7 +3,7 @@ title: 'Join a room as the avatar'
 type: 'feature'
 ticket: '1'
 created: '2026-10-17'
-status: 'built'
+status: done
 baseline_revision: '5456ea39c555798af4c9af708852555ff2471c0d'
 route: 'full'
 route_source: 'auto'

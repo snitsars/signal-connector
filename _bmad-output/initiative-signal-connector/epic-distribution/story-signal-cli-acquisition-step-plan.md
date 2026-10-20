@@ -3,7 +3,7 @@ title: 'signal-cli acquisition step'
 type: 'feature'
 ticket: '4'
 created: '2026-10-20'
-status: 'built'
+status: done
 baseline_revision: 'b81b8f29398b3434f617d3000a98e6bfd3d49dc0'
 route: 'full'
 route_source: 'auto'
