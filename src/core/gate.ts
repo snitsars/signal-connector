@@ -65,6 +65,40 @@ export interface PasteInput {
  */
 export const PROVIDER_HOSTS: ReadonlyArray<string> = [];
 
+/**
+ * Pull the first usable meeting link out of a pasted message. Operators forward
+ * invitations whole ("Натисніть це посилання…", a dial-in block and a service
+ * page), so the link is rarely a bare URL. Service pages are skipped: the
+ * dial-in info page is on the provider's host but is not a room.
+ */
+const URL_PATTERN = /https?:\/\/[^\s<>"'`]+/gi;
+const SERVICE_PATH = /\/(static|dialin|dial-in|tel|invite)(\/|$)|dialininfo|\.html?$/i;
+
+function cleanUrl(raw: string): string {
+  return raw.replace(/[.,;:!?)\]}'"]+$/g, "");
+}
+
+export function extractMeetingLink(
+  text: string,
+  providerHosts: ReadonlyArray<string> = [],
+): string | undefined {
+  const candidates: string[] = [];
+  for (const raw of text.match(URL_PATTERN) ?? []) {
+    const url = cleanUrl(raw);
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "https:") continue;
+      if (SERVICE_PATH.test(parsed.pathname)) continue;
+      candidates.push(url);
+    } catch {
+      /* not a URL after all */
+    }
+  }
+  const allowed = new Set(providerHosts.map((host) => host.trim().toLowerCase()));
+  const preferred = candidates.find((url) => allowed.has(new URL(url).hostname.toLowerCase()));
+  return preferred ?? candidates[0];
+}
+
 /** Decide whether a paste may proceed to the probe and the claim. */
 export function decidePaste(input: PasteInput): PasteDecision {
   const allow = input.allow ?? [];
@@ -74,7 +108,7 @@ export function decidePaste(input: PasteInput): PasteDecision {
   const identity = resolveIdentity(input, allow);
   if (!identity.ok) return { ok: false, category: "not-authorised", ...(identity.detail ? { detail: identity.detail } : {}) };
 
-  const link = parseLink(input.text);
+  const link = parseLink(extractMeetingLink(input.text, input.providerHosts) ?? input.text);
   if (!link) return { ok: false, category: "malformed-link" };
 
   if (!isAllowedHost(link, input.providerHosts)) {

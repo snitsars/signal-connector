@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decidePaste, PROVIDER_HOSTS, type PasteInput } from "./gate.js";
+import { decidePaste, extractMeetingLink, PROVIDER_HOSTS, type PasteInput } from "./gate.js";
 
 const LINK = "https://meet.jit.si/room-abc";
 const ALLOW = [{ id: "+1000", label: "+1000" }];
@@ -146,5 +146,57 @@ describe("PROVIDER_HOSTS", () => {
       paste({ text: "https://meet.jit.si/room", providerHosts: PROVIDER_HOSTS }),
     );
     expect(decision).toEqual({ ok: false, category: "foreign-provider" });
+  });
+});
+
+describe("extractMeetingLink", () => {
+  const INVITATION = [
+    "Натисніть це посилання, щоб приєднатися до зустрічі:",
+    "https://meet.jit.si/signalconnectortalks",
+    "",
+    "=====",
+    "",
+    "Хочете приєднатися телефоном?",
+    "",
+    "Телефон: +1.512.647.1431 PIN: 3819584065#",
+    "",
+    "Натисніть це посилання, щоб переглянути номери телефонів для цієї зустрічі",
+    "https://meet.jit.si/static/dialInInfo.html?room=signalconnectortalks",
+  ].join("\n");
+
+  it("finds the room in a forwarded invitation and skips the dial-in page", () => {
+    expect(extractMeetingLink(INVITATION, HOSTS)).toBe(
+      "https://meet.jit.si/signalconnectortalks",
+    );
+  });
+
+  it("returns nothing when the message only carries the service page", () => {
+    const onlyInfo =
+      "Номери телефонів: https://meet.jit.si/static/dialInInfo.html?room=room-abc";
+    expect(extractMeetingLink(onlyInfo, HOSTS)).toBeUndefined();
+  });
+
+  it("drops trailing punctuation around a bare link", () => {
+    expect(extractMeetingLink("Join here: https://meet.jit.si/room-abc.")).toBe(
+      "https://meet.jit.si/room-abc",
+    );
+  });
+
+  it("prefers the configured provider when a message contains several links", () => {
+    const text = "docs https://example.com/help and room https://meet.jit.si/room-abc";
+    expect(extractMeetingLink(text, HOSTS)).toBe("https://meet.jit.si/room-abc");
+  });
+
+  it("still lets the gate refuse a foreign host from a forwarded message", () => {
+    const decision = decidePaste(
+      paste({ text: "Join us: https://zoom.us/j/12345", providerHosts: HOSTS }),
+    );
+    expect(decision).toEqual({ ok: false, category: "foreign-provider" });
+  });
+
+  it("joins a room pasted together with the invitation prose", () => {
+    const decision = decidePaste(paste({ text: INVITATION, delivery: "sync" }));
+    expect(decision.ok).toBe(true);
+    if (decision.ok) expect(decision.link.href).toBe("https://meet.jit.si/signalconnectortalks");
   });
 });

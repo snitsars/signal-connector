@@ -701,7 +701,7 @@ export class CoreApp {
   private async meetCommand(args: string, msg?: IncomingMessage): Promise<void> {
     const trimmed = args.trim();
     if (!trimmed) {
-      await this.reply("Usage: /meet <link>, or /meet stop");
+      await this.reply("Usage: /meet <link or invitation>, or /meet stop");
       return;
     }
     if (/^stop$/i.test(trimmed)) {
