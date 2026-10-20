@@ -7,6 +7,8 @@
  * never change the machine it describes. Each returns the exit code; only the
  * composition root (`src/index.ts`) calls `process.exit`.
  */
+import os from "node:os";
+import { installPlugin, packageRoot, pluginStatus, type PluginPaths } from "./plugin.js";
 import {
   configStep,
   dataDirStep,
@@ -237,6 +239,59 @@ export const nodeVersionStep: SetupStep = {
 };
 
 /**
+ * The opencode plugin. The check is `plugin status`, the apply is
+ * `plugin install` — the same helpers the commands use, so a step can never
+ * disagree with what the CLI would do. Paths default to this machine's; a test
+ * passes temp ones.
+ */
+export function pluginStep(env: Partial<PluginPaths> = {}): SetupStep {
+  const paths = (): PluginPaths => ({
+    root: env.root ?? packageRoot(),
+    home: env.home ?? os.homedir(),
+    cwd: env.cwd ?? process.cwd(),
+  });
+
+  return {
+    id: "plugin",
+    title: "opencode plugin",
+    check: () => {
+      const status = pluginStatus(paths());
+      switch (status.state) {
+        case "installed":
+          return {
+            status: "ok",
+            reason: `signal-connector ${status.version} is installed at ${status.path}`,
+          };
+        case "absent":
+          return {
+            status: "missing",
+            reason: `${status.path} does not exist`,
+            fix: 'run "signal-connector plugin install"',
+          };
+        case "stale":
+          return {
+            status: "missing",
+            reason: `${status.path} differs from the packaged copy of ${status.version}`,
+            fix: 'run "signal-connector plugin install"',
+          };
+        case "conflict":
+          // Applying would either double the plugin or destroy the operator's
+          // copy, so this is a failure the step refuses to repair on its own.
+          return {
+            status: "failed",
+            reason: `${status.conflict} shadows the global plugin`,
+            fix: `remove ${status.conflict}, then run "signal-connector plugin install"`,
+          };
+      }
+    },
+    apply: () => {
+      const install = installPlugin(paths());
+      if (install.code !== 0) throw new Error(install.message);
+    },
+  };
+}
+
+/**
  * The ordered product registry. Later stories append their steps; order and ids
  * are decisions in code, never something a half-written config could drop.
  */
@@ -249,5 +304,6 @@ export function registry(): readonly SetupStep[] {
     dataDirStep(),
     configStep(),
     secretsStep(),
+    pluginStep(),
   ];
 }

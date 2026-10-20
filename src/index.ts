@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 /**
- * Entry point. Its static graph is deliberately tiny — the arg parser and the
- * setup contract only — so `--version`, `--help`, doctor and setup work below
- * the Node floor, where `node:sqlite` and the adapters cannot even be loaded.
- * The daemon path (config, store, secrets, adapters) is imported dynamically
- * inside its branch and nowhere else.
+ * Entry point. Its static graph is deliberately tiny — the arg parser, the
+ * setup contract and the plugin helpers only — so `--version`, `--help`,
+ * doctor, setup and the plugin commands work below the Node floor, where
+ * `node:sqlite` and the adapters cannot even be loaded. The daemon path
+ * (config, store, secrets, adapters) is imported dynamically inside its branch
+ * and nowhere else.
  */
 import { readFileSync, writeSync } from "node:fs";
+import { homedir } from "node:os";
 import { parseArgs, USAGE } from "./cli/args.js";
+import { describeStatus, installPlugin, packageRoot, pluginStatus } from "./cli/plugin.js";
 import { registry, runDoctor, runSetup, stepContext } from "./cli/setup.js";
 
 /** Reads the version from the manifest beside the build output (and the sources). */
@@ -26,6 +29,12 @@ function print(fd: 1 | 2, text: string): void {
   // writeSync, not process.stdout.write: the process exits immediately after and
   // a piped stdout would be cut short by process.exit.
   writeSync(fd, `${text}\n`);
+}
+
+/** One line, no stack: a missing packaged file is a reason, not a crash report. */
+function reasonLine(err: unknown): string {
+  const text = err instanceof Error ? err.message : String(err);
+  return text.replace(/\s*\r?\n\s*/g, " ").trim() || "unknown error";
 }
 
 const mode = parseArgs(process.argv.slice(2));
@@ -55,6 +64,23 @@ if (mode === "version") {
       print(2, `fatal: ${String(err)}`);
       process.exit(1);
     });
+} else if (mode === "plugin-status" || mode === "plugin-install") {
+  // Before the daemon import, and read-only for status: these helpers touch the
+  // plugins directory only — never config, the store, the network or opencode.
+  try {
+    const paths = { root: packageRoot(), home: homedir(), cwd: process.cwd() };
+    if (mode === "plugin-install") {
+      const install = installPlugin(paths);
+      print(install.code === 0 ? 1 : 2, install.message);
+      process.exit(install.code);
+    }
+    const status = pluginStatus(paths);
+    print(status.code === 0 ? 1 : 2, describeStatus(status));
+    process.exit(status.code);
+  } catch (err: unknown) {
+    print(2, `fatal: ${reasonLine(err)}`);
+    process.exit(1);
+  }
 } else if (mode === "usage") {
   print(2, `unrecognised arguments: ${process.argv.slice(2).join(" ")}\n\n${USAGE}`);
   process.exit(1);

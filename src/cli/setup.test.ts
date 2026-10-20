@@ -6,6 +6,7 @@ import {
   meetsNodeFloor,
   NODE_FLOOR,
   nodeVersionStep,
+  pluginStep,
   registry,
   runDoctor,
   runSetup,
@@ -14,6 +15,7 @@ import {
   type StepContext,
   type StepReport,
 } from "./setup.js";
+import { PLUGIN_FILE, pluginsDir } from "./plugin.js";
 
 /** A step whose behaviour each test scripts inline. */
 function stepOf(id: string, check: () => StepReport, apply?: () => void): SetupStep {
@@ -356,6 +358,7 @@ describe("registry", () => {
       "data-directory",
       "config",
       "secrets",
+      "plugin",
     ]);
     expect(new Set(steps.map((step) => step.id)).size).toBe(steps.length);
   });
@@ -366,6 +369,117 @@ describe("registry", () => {
     ) as { engines?: { node?: string } };
     const floor = /(\d+\.\d+\.\d+)/.exec(manifest.engines?.node ?? "")?.[1];
     expect(floor).toBe(NODE_FLOOR);
+  });
+});
+
+/** A package root that ships a manifest and the packaged plugin. */
+function tempPackage(version: string): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-plugin-step-"));
+  fs.mkdirSync(path.join(root, "plugins"));
+  fs.writeFileSync(path.join(root, "plugins", PLUGIN_FILE), "// packaged\n");
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
+  return root;
+}
+
+describe("pluginStep", () => {
+  it("reports a satisfied plugin against the packaged version", () => {
+    const root = tempPackage("0.1.0");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-home-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-cwd-"));
+    try {
+      const step = pluginStep({ root, home, cwd });
+      expect(step.check(ctx).status).toBe("missing");
+
+      // The step's own apply is the only write, and it satisfies the check.
+      step.apply?.(ctx);
+      const report = step.check(ctx);
+      expect(report.status).toBe("ok");
+      expect(report.reason).toContain("0.1.0");
+      expect(report.reason).toContain(path.join(pluginsDir(home), PLUGIN_FILE));
+    } finally {
+      for (const dir of [root, home, cwd]) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names the fix when the plugin is absent or stale", () => {
+    const root = tempPackage("0.2.0");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-home-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-cwd-"));
+    try {
+      const step = pluginStep({ root, home, cwd });
+      const absent = step.check(ctx);
+      expect(absent.status).toBe("missing");
+      expect(absent.reason).toContain("does not exist");
+      expect(absent.fix).toContain("plugin install");
+
+      step.apply?.(ctx);
+      fs.writeFileSync(path.join(root, "plugins", PLUGIN_FILE), "// 0.3.0\n");
+      const stale = step.check(ctx);
+      expect(stale.status).toBe("missing");
+      expect(stale.reason).toContain("differs from the packaged copy of 0.2.0");
+      expect(stale.fix).toContain("plugin install");
+    } finally {
+      for (const dir of [root, home, cwd]) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails on a project copy, naming it, and setup never applies it", async () => {
+    const root = tempPackage("0.1.0");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-home-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-cwd-"));
+    const local = path.join(cwd, ".opencode", "plugins", PLUGIN_FILE);
+    fs.mkdirSync(path.dirname(local), { recursive: true });
+    fs.writeFileSync(local, "// project copy\n");
+    try {
+      const step = pluginStep({ root, home, cwd });
+      const { print, output } = sink();
+      expect(await runSetup([step], contextOf(print))).toBe(1);
+
+      expect(output[0]).toContain("failed");
+      expect(output[0]).toContain(local);
+      expect(output.some((line) => line.startsWith("apply"))).toBe(false);
+      expect(fs.existsSync(path.join(pluginsDir(home), PLUGIN_FILE))).toBe(false);
+      expect(fs.readFileSync(local, "utf8")).toBe("// project copy\n");
+    } finally {
+      for (const dir of [root, home, cwd]) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("installs once under setup and is skipped on the second run", async () => {
+    const root = tempPackage("0.1.0");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-home-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-cwd-"));
+    try {
+      const step = pluginStep({ root, home, cwd });
+
+      const first = sink();
+      expect(await runSetup([step], contextOf(first.print))).toBe(0);
+      expect(first.output[0]).toContain("apply");
+      expect(first.output[1]).toContain("ok");
+      expect(fs.existsSync(path.join(pluginsDir(home), PLUGIN_FILE))).toBe(true);
+
+      const second = sink();
+      expect(await runSetup([step], contextOf(second.print))).toBe(0);
+      expect(second.output[0]).toContain("skip");
+      expect(second.output.some((line) => line.startsWith("apply"))).toBe(false);
+    } finally {
+      for (const dir of [root, home, cwd]) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a broken package as a failed step instead of crashing", async () => {
+    const root = tempPackage("0.1.0");
+    fs.rmSync(path.join(root, "plugins", PLUGIN_FILE));
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-home-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "signal-connector-cwd-"));
+    try {
+      const { print, output } = sink();
+      expect(await runDoctor([pluginStep({ root, home, cwd })], contextOf(print))).toBe(1);
+      expect(output[0]).toContain("failed");
+      expect(output[0]).toContain("packaged plugin is missing");
+    } finally {
+      for (const dir of [root, home, cwd]) fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

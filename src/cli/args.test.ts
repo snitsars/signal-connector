@@ -27,6 +27,18 @@ describe("parseArgs", () => {
     expect(parseArgs(["doctor", "-v"])).toBe("usage");
   });
 
+  it("recognises the two-word plugin commands", () => {
+    expect(parseArgs(["plugin", "install"])).toBe("plugin-install");
+    expect(parseArgs(["plugin", "status"])).toBe("plugin-status");
+  });
+
+  it("rejects a plugin command that is incomplete, unknown or padded", () => {
+    expect(parseArgs(["plugin"])).toBe("usage");
+    expect(parseArgs(["plugin", "update"])).toBe("usage");
+    expect(parseArgs(["plugin", "install", "--force"])).toBe("usage");
+    expect(parseArgs(["plugin", "status", "extra"])).toBe("usage");
+  });
+
   it("treats anything else as a usage error", () => {
     expect(parseArgs(["--nope"])).toBe("usage");
     expect(parseArgs(["start"])).toBe("usage");
@@ -44,6 +56,8 @@ describe("parseArgs", () => {
     expect(USAGE).toContain("--help");
     expect(USAGE).toContain("doctor");
     expect(USAGE).toContain("setup");
+    expect(USAGE).toContain("plugin install");
+    expect(USAGE).toContain("plugin status");
     expect(USAGE).toContain("default");
   });
 });

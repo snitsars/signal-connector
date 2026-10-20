@@ -26,6 +26,8 @@ The dry run uses an in-memory store and console/scripted ports — no Signal or 
 npm run build
 node dist/index.js doctor   # report readiness — changes nothing
 node dist/index.js setup    # apply what is missing — safe to re-run
+node dist/index.js plugin status    # installed | stale | absent | conflict
+node dist/index.js plugin install   # copy the plugin into ~/.config/opencode/plugins
 ```
 
 `doctor` runs every registered check and prints one line per step (`ok`, `missing`, `failed`, with
@@ -34,11 +36,18 @@ writes a config, creates the data directory, constructs the secret store or open
 `setup` walks the same registry in the same order, skips steps that already pass, applies the rest
 and stops at the first failure, so a rerun resumes from there.
 
+`plugin install` copies the packaged `plugins/signal-connector.ts` into `~/.config/opencode/plugins`
+and prints the version it wrote; `plugin status` compares the installed bytes with the packaged ones
+and prints `installed`, `stale`, `absent` or `conflict`. A project-local
+`.opencode/plugins/signal-connector.ts` shadows the global copy, so it is named as the conflict and
+is never overwritten or deleted.
+
 The registry checks, in order: the Node floor (>= 22.13), Java (the configured JDK or `java` on
 PATH), signal-cli (the configured `signal.command`/`signal.cliPath` or PATH), opencode (the
 configured `agent.opencodePath` or PATH), the data directory, `config.toml` (present and valid,
-read without creating anything), and the secret store (PowerShell 7 for DPAPI on Windows, an
-in-memory store elsewhere). The daemon runs the same registry before it opens the store, starts
+read without creating anything), the secret store (PowerShell 7 for DPAPI on Windows, an
+in-memory store elsewhere), and the opencode plugin (installed and byte-identical to the package).
+The daemon runs the same registry before it opens the store, starts
 signal-cli or launches a browser; if any step is missing it prints those lines and exits 1.
 
 ## Architecture
@@ -77,7 +86,8 @@ client with `ctx.session.*`, `ctx.permission.*`, `ctx.event.subscribe`).
 1. Set `agent.kind = "plugin"` in `config.toml` (bridge defaults to `127.0.0.1:8790`).
 2. Run the service (`pwsh scripts/run.ps1`).
 3. Open a project in opencode. The plugin at `plugins/signal-connector.ts` (installed globally by
-   `scripts/start-all.ps1`) connects, registers its project, and starts handling commands.
+   `scripts/start-all.ps1` or `signal-connector plugin install`) connects, registers its project,
+   and starts handling commands.
 
 **Multi-project quick start** — one command installs the plugin globally, sets plugin mode,
 starts the service, and opens each project in opencode:

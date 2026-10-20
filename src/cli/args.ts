@@ -4,7 +4,15 @@
  * composition root (`src/index.ts`) turns the mode into behaviour.
  */
 
-export type CliMode = "daemon" | "doctor" | "setup" | "version" | "help" | "usage";
+export type CliMode =
+  | "daemon"
+  | "doctor"
+  | "setup"
+  | "plugin-install"
+  | "plugin-status"
+  | "version"
+  | "help"
+  | "usage";
 
 export const USAGE = [
   "signal-connector — bridge a Signal chat to a local opencode coding agent",
@@ -13,6 +21,8 @@ export const USAGE = [
   "  signal-connector                 start the daemon (default)",
   "  signal-connector doctor          report whether this machine is ready (read-only)",
   "  signal-connector setup           prepare this machine, skipping what is already ready",
+  "  signal-connector plugin install  copy the opencode plugin into ~/.config/opencode/plugins",
+  "  signal-connector plugin status   report the installed plugin: installed, stale, absent, conflict",
   "  signal-connector -v, --version   print the package version and exit",
   "  signal-connector -h, --help      print this help and exit",
   "",
@@ -32,6 +42,13 @@ export function parseArgs(argv: readonly string[]): CliMode {
   // These modes take no options: `setup --help` must not install anything.
   if (first === "doctor") return argv.length === 1 ? "doctor" : "usage";
   if (first === "setup") return argv.length === 1 ? "setup" : "usage";
+  // A two-word command: `plugin install` or `plugin status`, and nothing after.
+  if (first === "plugin") {
+    if (argv.length !== 2) return "usage";
+    if (argv[1] === "install") return "plugin-install";
+    if (argv[1] === "status") return "plugin-status";
+    return "usage";
+  }
   if (first === "--version" || first === "-v") return "version";
   if (first === "--help" || first === "-h") return "help";
   return "usage";

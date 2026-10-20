@@ -14,6 +14,7 @@ function builtEntry(): string {
     "src/daemon.ts",
     "src/cli/setup.ts",
     "src/cli/steps.ts",
+    "src/cli/plugin.ts",
     "src/config/config.ts",
     "src/store/sqliteDriver.ts",
   ].map((file) => path.join(root, file));
@@ -47,9 +48,16 @@ describe("src/index.ts", () => {
       (match) => match[1] ?? "",
     );
 
-    // The whole static graph: only the parser and the setup contract may load
-    // before the mode is known, so doctor works below the Node floor.
-    expect(statics.sort()).toEqual(["./cli/args.js", "./cli/setup.js", "node:fs"]);
+    // The whole static graph: only the parser, the setup contract and the
+    // plugin helpers may load before the mode is known, so doctor and the
+    // plugin commands work below the Node floor.
+    expect(statics.sort()).toEqual([
+      "./cli/args.js",
+      "./cli/plugin.js",
+      "./cli/setup.js",
+      "node:fs",
+      "node:os",
+    ]);
     expect(source).toContain('import("./daemon.js")');
   });
 
