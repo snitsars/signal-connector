@@ -39,6 +39,7 @@ import { PiperSynthesizer } from "./piper.js";
 import { SherpaTranscriber } from "./sherpa.js";
 import { HttpTranscriber } from "./httpTranscriber.js";
 import { HttpSynthesizer } from "./httpSynthesizer.js";
+import { EdgeSynthesizer } from "./edge.js";
 import { RivaTranscriber } from "./riva.js";
 import { normalizeSamples, pcmToWav } from "./wav.js";
 import {
@@ -200,7 +201,13 @@ export class BrowserVoice implements VoicePort {
             apiKey: options.ttsKey ?? "",
             workDir: options.workDir,
           })
-        : this.synthChoice() === "piper"
+        : this.synthChoice() === "edge"
+          ? new EdgeSynthesizer({
+              voice: options.config.edgeVoice,
+              rate: options.config.edgeRate,
+              workDir: options.workDir,
+            })
+          : this.synthChoice() === "piper"
           ? new PiperSynthesizer({
               command: options.config.piperPath,
               voicePath: options.config.piperVoicePath,
@@ -255,9 +262,10 @@ export class BrowserVoice implements VoicePort {
   }
 
   /** Pick the configured voice; "auto" keeps the best local one. */
-  private synthChoice(): "http" | "piper" | "sapi" {
+  private synthChoice(): "http" | "edge" | "piper" | "sapi" {
     const choice = this.config.synthesizer;
     if (choice === "http") return "http";
+    if (choice === "edge") return "edge";
     if (choice === "piper") return "piper";
     if (choice === "sapi") return "sapi";
     return this.config.piperPath.trim() && this.config.piperVoicePath.trim()

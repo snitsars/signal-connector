@@ -44,6 +44,7 @@
     "prepublishOnly": "npm test"
   },
   "dependencies": {
+    "@andresaya/edge-tts": "^1.9.1",
     "@grpc/grpc-js": "^1.14.6",
     "@grpc/proto-loader": "^0.8.1",
     "qrcode": "^1.5.4",

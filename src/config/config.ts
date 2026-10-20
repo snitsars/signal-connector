@@ -72,8 +72,12 @@ export const ConfigSchema = z.object({
       piperVoicePath: z.string().default(""),
     /** Piper's speaking pace; 1 is the model's own, higher is slower. */
     piperLengthScale: z.number().positive().default(1.0),
-    /** Which voice: auto (Piper if fetched, else SAPI), piper, sapi or http. */
-    synthesizer: z.enum(["auto", "piper", "sapi", "http"]).default("auto"),
+    /** Which voice: auto (Piper if fetched, else SAPI), piper, sapi, edge or http. */
+    synthesizer: z.enum(["auto", "piper", "sapi", "edge", "http"]).default("auto"),
+    /** Microsoft Edge neural voice for the "edge" synthesizer. */
+    edgeVoice: z.string().default("uk-UA-OstapNeural"),
+    /** Edge prosody, e.g. "+0%". */
+    edgeRate: z.string().default("+0%"),
     /** OpenAI-compatible /v1/audio/speech endpoint and its settings. */
     ttsUrl: z.string().default(""),
     ttsModel: z.string().default("gpt-4o-mini-tts"),
