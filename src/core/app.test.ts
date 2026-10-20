@@ -1587,7 +1587,7 @@ describe("voice in the meeting", () => {
     expect(heard?.channelId).toBe("group-1-demo");
 
     const task = ctx.agent.started.at(-1)!;
-    expect(task.prompt).toBe("what does the parser do");
+    expect(task.prompt.startsWith("what does the parser do")).toBe(true);
     expect(task.sessionId).toBe("ses_pinned");
     expect(ctx.store.getSession("demo")).toBe("ses_pinned");
 
@@ -1672,7 +1672,7 @@ describe("voice in the meeting", () => {
     await tick();
 
     expect(ctx.agent.started).toHaveLength(tasksBefore + 1);
-    expect(ctx.agent.started.at(-1)?.prompt).toBe("yes");
+    expect(ctx.agent.started.at(-1)?.prompt.startsWith("yes")).toBe(true);
     expect(ctx.signal.sent.some((m) => m.text.includes("heard: yes"))).toBe(true);
     expect(ctx.signal.sent.some((m) => m.text.includes("spoken word cannot"))).toBe(false);
     expect(said()).toHaveLength(0);
@@ -1731,7 +1731,7 @@ describe("voice in the meeting", () => {
 
     // The stopped task's stale approval no longer refuses ordinary speech.
     expect(ctx.agent.started).toHaveLength(tasksBefore + 1);
-    expect(ctx.agent.started.at(-1)?.prompt).toBe("yes");
+    expect(ctx.agent.started.at(-1)?.prompt.startsWith("yes")).toBe(true);
     expect(ctx.agent.decisions).toHaveLength(0);
     await ctx.app.stop();
   });
@@ -1757,7 +1757,7 @@ describe("voice in the meeting", () => {
     await tick();
     await tick();
 
-    expect(ctx.agent.started.at(-1)?.prompt).toBe("yes");
+    expect(ctx.agent.started.at(-1)?.prompt.startsWith("yes")).toBe(true);
     expect(ctx.agent.decisions).toHaveLength(0);
     // The stale row is dropped and the pruned list persisted.
     expect(ctx.store.getValue("pending:group-1-demo")).toBe("[]");
@@ -1845,7 +1845,7 @@ describe("voice in the meeting", () => {
 
     expect(ctx.agent.aborted).toHaveLength(0);
     expect(ctx.agent.started.length).toBe(before + 1);
-    expect(ctx.agent.started.at(-1)?.prompt).toBe("/stop");
+    expect(ctx.agent.started.at(-1)?.prompt.startsWith("/stop")).toBe(true);
     await ctx.app.stop();
   });
 
@@ -2062,8 +2062,10 @@ describe("voice in the meeting", () => {
     await tick();
 
     const spoken = voice.spoken.at(-1)!;
-    expect(spoken).toContain("Відповідь на «what does the parser do»");
-    expect(spoken).toContain("it handles quotes");
+    expect(spoken).toBe("it handles quotes");
+    // The question is named by the model, not by a template around the clip.
+    expect(spoken).not.toContain("Відповідь на");
+    expect(ctx.agent.started.at(-1)?.prompt).toContain("Answer in Ukrainian");
     await ctx.app.stop();
   });
 

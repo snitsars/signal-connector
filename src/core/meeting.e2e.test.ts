@@ -445,7 +445,7 @@ describe("meeting end-to-end suite", () => {
     expect(heard[0]!.channelId).toBe("group-1-demo");
 
     const spokenTask = harness.agent.started.at(-1)!;
-    expect(spokenTask.prompt).toBe("what does the parser do");
+    expect(spokenTask.prompt.startsWith("what does the parser do")).toBe(true);
     expect(spokenTask.sessionId).toBe("ses_pinned");
     expect(harness.store.getSession("demo")).toBe("ses_pinned");
     expect(harness.store.getTask(spokenTask.taskId)?.voice).toBe(true);
@@ -578,7 +578,7 @@ describe("meeting end-to-end suite", () => {
       harness.voice.utterance(words);
       await settle();
 
-      expect(harness.agent.started.at(-1)?.prompt).toBe(words);
+      expect(harness.agent.started.at(-1)?.prompt.startsWith(words)).toBe(true);
       expect(harness.signal.sent.some((m) => m.text.includes(`heard: ${words}`))).toBe(true);
       expect(harness.store.getOpenMeeting()).not.toBeUndefined();
       expect(harness.meeting.leaves).toHaveLength(0);

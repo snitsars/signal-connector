@@ -546,10 +546,16 @@ export class CoreApp {
       ...(typeof origin === "object" ? { voice: true } : {}),
     };
     const sessionId = this.store.getSession(project.id);
+    // The room hears the answer, not the prompt: a spoken question carries one
+    // instruction so the answer opens by naming the question as a native
+    // speaker would. The stored prompt stays the operator's own words.
+    const instruction =
+      typeof origin === "object" ? this.config.voice.answerInstruction.trim() : "";
+    const agentPrompt = instruction ? `${prompt}\n\n[${instruction}]` : prompt;
     const started = await this.agent.startTask({
       taskId: task.id,
       project,
-      prompt,
+      prompt: agentPrompt,
       ...(sessionId ? { sessionId } : {}),
     });
     task.sessionId = started.sessionId;
@@ -1277,12 +1283,7 @@ export class CoreApp {
       task.state === "failed"
         ? `The task failed: ${task.error ?? "unknown error"}`
         : task.summary ?? "The task is done.";
-    // An answer can arrive after the next question; naming the question keeps a
-    // late or out-of-order clip understandable without replaying in lockstep.
-    const question = task.prompt.replace(/\s+/g, " ").trim();
-    const snippet = question.length > 70 ? `${question.slice(0, 69)}…` : question;
-    const prefix = this.config.voice.answerPrefix.replace("{question}", snippet);
-    void handle.speak(`${prefix}${body}`).catch((err: unknown) => {
+    void handle.speak(body).catch((err: unknown) => {
       this.logger.warn("voice: could not speak the answer", { error: String(err) });
     });
   }
