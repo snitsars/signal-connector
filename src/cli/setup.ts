@@ -8,6 +8,7 @@
  * composition root (`src/index.ts`) calls `process.exit`.
  */
 import os from "node:os";
+import { linkStep } from "./configure.js";
 import { installPlugin, packageRoot, pluginStatus, type PluginPaths } from "./plugin.js";
 import {
   configStep,
@@ -35,6 +36,8 @@ export interface SetupConfig {
   signal: {
     cliPath: string;
     command?: string[];
+    /** The linked number; a config without it is not ready to run. */
+    account?: string;
   };
   agent: {
     opencodePath: string;
@@ -298,10 +301,11 @@ export function pluginStep(env: Partial<PluginPaths> = {}): SetupStep {
 export function registry(): readonly SetupStep[] {
   return [
     nodeVersionStep,
+    dataDirStep(),
     javaStep(),
     signalCliStep(),
     opencodeStep(),
-    dataDirStep(),
+    linkStep(),
     configStep(),
     secretsStep(),
     pluginStep(),

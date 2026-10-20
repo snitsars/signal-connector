@@ -1,17 +1,28 @@
 /**
- * `npm run link` — start the daemon, render the device-link URI as a QR image,
- * open it, and wait for the operator to scan.
+ * The live device-link driver, shared by `npm run link` and the setup step.
+ *
+ * `signalLinker` is the four-phase `DeviceLink` the step can fake: it starts
+ * the signal-cli daemon, renders the QR image under the data directory, polls
+ * `finishLink` and stops the daemon. `linkWithQr` is the script's whole flow
+ * over the same phases, so setup and `npm run link` cannot drift apart.
  */
 import { spawn } from "node:child_process";
-import os from "node:os";
+import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import QRCode from "qrcode";
 import { SignalCliDaemon } from "../adapters/signal/daemon.js";
-import { finishLink, linkInstructions, startLink } from "../adapters/signal/link.js";
-import { loadConfig } from "../config/config.js";
-import { createLogger } from "../logging/logger.js";
-
-const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+import { finishLink, startLink } from "../adapters/signal/link.js";
+import { dataDir, loadConfig } from "../config/config.js";
+import { createLogger, type Logger } from "../logging/logger.js";
+import {
+  driveLink,
+  LINK_HOST,
+  LINK_PORT,
+  type DeviceLink,
+  type SignalCommand,
+} from "./configure.js";
+import type { Print } from "./setup.js";
 
 function openFile(filePath: string): void {
   try {
@@ -27,47 +38,117 @@ function openFile(filePath: string): void {
   }
 }
 
+export interface SignalLinkerOptions {
+  dataDir: string;
+  signal: SignalCommand;
+  host?: string;
+  port?: number;
+  /** Passed to the daemon when config.toml already names an account. */
+  account?: string;
+  logger?: Logger;
+}
+
+/** The production phases. The QR image lives under the data directory. */
+export function signalLinker(options: SignalLinkerOptions): DeviceLink {
+  const host = options.host ?? LINK_HOST;
+  const port = options.port ?? LINK_PORT;
+  const daemon = new SignalCliDaemon({
+    command: options.signal.command,
+    host,
+    port,
+    ...(options.account ? { account: options.account } : {}),
+    logger: options.logger ?? createLogger({ level: "info" }),
+  });
+  let endpoint = "";
+
+  return {
+    async start() {
+      await daemon.start();
+      endpoint = daemon.endpoint();
+      return startLink(endpoint);
+    },
+
+    async qr(uri) {
+      fs.mkdirSync(options.dataDir, { recursive: true });
+      const qrPath = path.join(options.dataDir, "link-qr.png");
+      await QRCode.toFile(qrPath, uri, { width: 512, margin: 2 });
+      return qrPath;
+    },
+
+    async finish(uri) {
+      try {
+        return await finishLink(endpoint, uri);
+      } catch {
+        // not scanned yet; keep waiting, exactly as the old loop did
+        return "";
+      }
+    },
+
+    async stop() {
+      await daemon.stop();
+    },
+  };
+}
+
+export interface LinkWithQrOptions {
+  dataDir: string;
+  signal: SignalCommand;
+  host?: string;
+  port?: number;
+  account?: string;
+  print: Print;
+  open?: (qrPath: string) => void;
+  attempts?: number;
+  intervalMs?: number;
+  logger?: Logger;
+}
+
+/** The script's flow over the shared phases; returns the linked number. */
+export async function linkWithQr(options: LinkWithQrOptions): Promise<string> {
+  const link = signalLinker(options);
+  const progress = await driveLink(link, {
+    print: options.print,
+    ...(options.open ? { open: options.open } : {}),
+    ...(options.attempts !== undefined ? { attempts: options.attempts } : {}),
+    ...(options.intervalMs !== undefined ? { intervalMs: options.intervalMs } : {}),
+  });
+  return progress.number;
+}
+
 async function main(): Promise<void> {
   const config = loadConfig();
-  const logger = createLogger({ level: "info" });
-  const daemon = new SignalCliDaemon({
-    command: config.signal.command ?? [config.signal.cliPath],
+  const number = await linkWithQr({
+    dataDir: dataDir(),
+    signal: {
+      cliPath: config.signal.cliPath,
+      command: config.signal.command ?? [config.signal.cliPath],
+    },
     host: config.signal.daemonHost,
     port: config.signal.daemonPort,
     ...(config.signal.account ? { account: config.signal.account } : {}),
-    logger,
+    print: (line) => process.stdout.write(`${line}\n`),
+    open: openFile,
   });
-  await daemon.start();
-
-  const endpoint = daemon.endpoint();
-  const uri = await startLink(endpoint);
-
-  const qrPath = path.join(os.tmpdir(), "signal-link-qr.png");
-  await QRCode.toFile(qrPath, uri, { width: 512, margin: 2 });
-
-  process.stdout.write(`${linkInstructions(uri)}\n\n`);
-  process.stdout.write(`QR image: ${qrPath}\n`);
-  process.stdout.write("Opening the QR image — scan it with Signal.\n");
-  openFile(qrPath);
-
-  for (let i = 0; i < 60; i++) {
-    await delay(3000);
-    try {
-      const number = await finishLink(endpoint, uri);
-      if (number) {
-        process.stdout.write(`Linked as ${number}. Set signal.account in config.toml.\n`);
-        await daemon.stop();
-        return;
-      }
-    } catch {
-      // not scanned yet; keep waiting
-    }
-  }
-  process.stderr.write("Link timed out; run `npm run link` again.\n");
-  await daemon.stop();
+  process.stdout.write(`Linked as ${number}. Set signal.account in config.toml.\n`);
 }
 
-main().catch((err: unknown) => {
-  process.stderr.write(`link failed: ${String(err)}\n`);
-  process.exit(1);
-});
+/**
+ * `npm run link` runs this file; the setup step imports it for `signalLinker`.
+ * The guard keeps the import from starting a second daemon.
+ */
+function invokedDirectly(): boolean {
+  const entry = process.argv[1];
+  if (entry === undefined) return false;
+  const left = path.resolve(entry);
+  const right = path.resolve(fileURLToPath(import.meta.url));
+  return process.platform === "win32"
+    ? left.toLowerCase() === right.toLowerCase()
+    : left === right;
+}
+
+if (invokedDirectly()) {
+  main().catch((err: unknown) => {
+    process.stderr.write(`link failed: ${String(err)}\n`);
+    process.exit(1);
+  });
+}

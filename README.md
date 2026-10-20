@@ -7,8 +7,8 @@ Windows-first, cross-platform. TypeScript / ESM / Node ≥ 22.13.
 
 ## Status
 
-Stage 1 is implemented and unit-tested (32 tests). Live Signal verification still needs a linked
-account. Planning artifacts live in `_bmad-output/initiative-signal-connector/`.
+Stage 1 is implemented and unit-tested. Live Signal verification still needs a linked account.
+Planning artifacts live in `_bmad-output/initiative-signal-connector/`.
 
 ## Try it without Signal (dry run)
 
@@ -36,16 +36,33 @@ writes a config, creates the data directory, constructs the secret store or open
 `setup` walks the same registry in the same order, skips steps that already pass, applies the rest
 and stops at the first failure, so a rerun resumes from there.
 
+The first run needs no hand edit. When `config.toml` does not exist, the device-link step starts
+signal-cli, prints a QR image at `<data dir>\link-qr.png` (and the URI), waits for the scan, and
+then writes `config.toml` with the linked number, the installed signal-cli command, the plugin
+agent and one project named after the current directory. The QR image and the link are injected in
+the tests, so the suite never needs a phone. Run `setup` from the project you want to work in:
+
+```bash
+cd C:\Sources\myapp
+node dist/index.js setup
+```
+
+An existing `config.toml` is the operator's work: setup never rewrites, merges or reorders it. If
+it has a `signal.account`, the step is `ok` and nothing is linked. If the file exists without an
+account, the step stops and prints the exact line to add (`account = "+<your number>"` under
+`[signal]`) and leaves the file byte-identical. A refused or timed-out link writes no config and
+still stops the daemon; the retry is another `setup` run.
+
 When no signal-cli is configured or on PATH, `setup` fetches one: it asks GitHub for the latest
 release, downloads the generic `signal-cli-<version>.tar.gz` (pure Java, not the Linux-native build),
 checks that the archive names the version it claims, and extracts it with the system `tar` into
 `<data dir>/signal-cli/signal-cli-<version>`. The step then finds that copy, so no config edit is
 needed to get it installed. signal-cli needs Java 17 or newer, and recent releases need the
 configured JDK (0.14.9 is compiled for Java 25); an already-installed copy is never downloaded
-again. On Windows, point `signal.command` at that JDK with
-`-cp <data dir>/signal-cli/signal-cli-<version>/lib/* org.asamk.signal.Main` (as
-`scripts/setup.ps1` does) rather than at the shipped `.bat`, whose long classpath overflows cmd's
-line limit under a deep data directory. The download is bounded and only GitHub hosts are
+again. On Windows the generated `config.toml` names that JDK with
+`-cp <data dir>/signal-cli/signal-cli-<version>/lib/* org.asamk.signal.Main` rather than the
+shipped `.bat`, whose long classpath overflows cmd's line limit under a deep data directory (a
+hand-written config must do the same). The download is bounded and only GitHub hosts are
 contacted, and `doctor` never downloads anything. Offline, the step stays `missing` with a
 one-line reason and `scripts/install-signal-cli.ps1` as the manual fallback.
 
@@ -57,10 +74,11 @@ is never overwritten or deleted.
 
 The registry checks, in order: the Node floor (>= 22.13), Java (the configured JDK or `java` on
 PATH), signal-cli (the configured `signal.command`/`signal.cliPath`, a PATH copy, or an installed
-copy under the data directory), opencode (the configured `agent.opencodePath` or PATH), the data
-directory, `config.toml` (present and valid, read without creating anything), the secret store (the
-kind actually in use on this platform), and the opencode plugin (installed and byte-identical to the
-package).
+copy under the data directory), the Signal device link (`config.toml` exists and names an account;
+applied only when the file is absent), opencode (the configured `agent.opencodePath` or PATH), the
+data directory, `config.toml` (present and valid, read without creating anything), the secret store
+(the kind actually in use on this platform), and the opencode plugin (installed and byte-identical
+to the package).
 The daemon runs the same registry before it opens the store, starts
 signal-cli or launches a browser; if any step is missing it prints those lines and exits 1.
 
@@ -367,18 +385,22 @@ rendered to Signal. Approvals are answered from Signal and relayed to the plugin
 Prerequisites: Windows 10+, Node ≥ 22.13. The scripts install the rest.
 
 ```powershell
-# 1. Java 25 + signal-cli + config.toml, with next steps printed
-pwsh scripts/setup.ps1                       # add -ProjectName myapp -ProjectPath C:\Sources\myapp
+# 1. Java 25 + signal-cli + device link + config.toml, with next steps printed
+npm install
+npm run build
+node dist/index.js setup                     # scan the QR; safe to re-run
 
 # 2. Start the opencode v2 server (background)
 pwsh scripts/start-opencode.ps1
 
-# 3. Link your Signal account (scan the QR shown in the terminal)
-pwsh scripts/link-device.ps1                 # = npm run link
-
-# 4. Put the printed number into signal.account, then run
+# 3. Run the daemon
 pwsh scripts/run.ps1                         # = npm run dev
 ```
+
+`scripts/setup.ps1` remains the PowerShell-only alternative for the Java and signal-cli install;
+it stops before the device link and never rewrites an existing config. If you use it, link with
+`pwsh scripts/link-device.ps1` (or `npm run link`) and add the printed number to `signal.account`
+by hand.
 
 Scripts:
 
@@ -400,10 +422,14 @@ A reference config lives at `scripts/config.example.toml`.
 
 ### Manual equivalent
 
-1. Install Java 25 and signal-cli; set `signal.cliPath` to `signal-cli.bat`.
-2. `opencode serve` (or set `agent.serverUrl` to your server).
-3. `npm run link` — scan the QR; set `signal.account`.
+1. `npm install && npm run build`.
+2. `node dist/index.js setup` — it installs Java 25 and signal-cli if needed, shows the QR to link
+   the device, and writes `config.toml` with the linked number and one project (the current
+   directory). Run it from the project you want to work in.
+3. `opencode serve` (or set `agent.serverUrl` to your server).
 4. `npm run dev`.
+
+To add more projects later, edit `[[projects]]` by hand; setup never rewrites an existing config.
 
 Then, in Signal Note-to-Self:
 

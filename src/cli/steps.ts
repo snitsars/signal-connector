@@ -374,6 +374,8 @@ export interface DataDirEnv {
   /** Returns undefined for a missing path; other errors are reported as failed. */
   stat?: (target: string) => fs.Stats | undefined;
   writable?: (target: string) => boolean;
+  /** Creates the directory; tests inject a recorder instead of touching disk. */
+  mkdir?: (target: string) => void;
 }
 
 function statOf(target: string, env: DataDirEnv): fs.Stats | undefined {
@@ -452,6 +454,12 @@ export function dataDirStep(env: DataDirEnv = {}): SyncSetupStep {
         fix: DATA_DIR_FIX,
       };
     },
+    apply: (ctx) => {
+      // The rest of setup writes here: the config, the QR image, the voice
+      // temp files and the state database. Create it once, user-only.
+      const make = env.mkdir ?? ((target: string) => fs.mkdirSync(target, { recursive: true, mode: 0o700 }));
+      make(ctx.dataDir);
+    },
   };
 }
 
@@ -472,19 +480,26 @@ export function configStep(
         return { status: "ok", reason: "config.toml is present and valid" };
       }
 
+      // The context is a snapshot taken before the run; a step that just wrote
+      // config.toml (the device link) would otherwise leave this check telling
+      // the operator to create the file it already created. Re-reading is still
+      // read-only, and the snapshot is the fallback when the read itself fails.
       let read: ConfigRead;
-      if (ctx.configProblem) {
+      try {
+        if (env.readConfig) {
+          read = env.readConfig(ctx.dataDir);
+        } else {
+          // Dynamic so the doctor static graph stays free of config, toml and zod.
+          const { readConfig } = await import("../config/config.js");
+          read = readConfig(ctx.dataDir);
+        }
+      } catch (err: unknown) {
+        if (!ctx.configProblem) throw err;
         read = {
           ok: false,
           absent: ctx.configProblem.absent,
           reason: ctx.configProblem.reason,
         };
-      } else if (env.readConfig) {
-        read = env.readConfig(ctx.dataDir);
-      } else {
-        // Dynamic so the doctor static graph stays free of config, toml and zod.
-        const { readConfig } = await import("../config/config.js");
-        read = readConfig(ctx.dataDir);
       }
 
       if (read.ok) {

@@ -352,10 +352,11 @@ describe("registry", () => {
     const steps = registry();
     expect(steps.map((step) => step.id)).toEqual([
       "node-version",
+      "data-directory",
       "java",
       "signal-cli",
       "opencode",
-      "data-directory",
+      "device-link",
       "config",
       "secrets",
       "plugin",

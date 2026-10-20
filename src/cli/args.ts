@@ -28,8 +28,8 @@ export const USAGE = [
   "",
   "Configuration lives in config.toml inside the SignalConnector data directory",
   "(%APPDATA%\\SignalConnector on Windows, ~/.config/SignalConnector elsewhere).",
-  "Link a Signal device, then set signal.account and at least one project before",
-  "starting.",
+  "Run setup to install what is missing, link a Signal device and write config.toml",
+  "with one project named after the current directory; an existing config is kept.",
 ].join("\n");
 
 /**
