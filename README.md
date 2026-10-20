@@ -10,6 +10,47 @@ Windows-first, cross-platform. TypeScript / ESM / Node ≥ 22.13.
 Stage 1 is implemented and unit-tested. Live Signal verification still needs a linked account.
 Planning artifacts live in `_bmad-output/initiative-signal-connector/`.
 
+## Quick start
+
+**What you need:** Node.js 22.13 or newer, a JDK (17 or newer; recent signal-cli releases are
+built for 25), opencode, and a phone with Signal. The connector fetches signal-cli itself — do not
+install it by hand.
+
+**Windows (PowerShell):**
+
+```powershell
+git clone https://github.com/<you>/SignalConnector.git
+cd SignalConnector
+npm install
+npm run build
+node dist/index.js doctor     # what is missing, with the exact fix
+node dist/index.js setup      # links your phone (QR) and writes config.toml
+node dist/index.js            # start the daemon; leave this window open
+```
+
+**macOS / Linux:** the same commands in a shell (the packaging is the same; only the scripts in
+`scripts/` are PowerShell).
+
+Then open this project in **opencode** (setup installed the plugin into
+`~/.config/opencode/plugins`), and from your phone send `/open <project>` in **Note to Self** to give
+the project its own group. Send `/task <prompt>` in that group — you will get one status message that
+edits itself, approvals as replies, and the final summary.
+
+**What each prerequisite is for:**
+
+| Prerequisite | Why | Fix `doctor` prints |
+|---|---|---|
+| Node ≥ 22.13 | the daemon and its SQLite store | install from nodejs.org |
+| Java 17+ | runs signal-cli | `pwsh scripts/ensure-java.ps1`, or a JDK 25 |
+| signal-cli | the Signal transport | `setup` fetches it; `scripts/install-signal-cli.ps1` |
+| opencode | the agent this bridges to | install opencode, then open the project |
+| data directory | config, store, logs, voice temp files | `setup` creates it |
+| config.toml | projects and Signal account | `setup` links and writes it |
+| secret store | API/transcription keys, never in the repo | `setup` reports DPAPI/keychain/file |
+
+If `doctor` and `setup` disagree, run `doctor` again after `setup`: it is the read-only view of the
+same registry. `setup` is safe to run as often as you like; it skips what already passes.
+
 ## Try it without Signal (dry run)
 
 ```bash
@@ -464,6 +505,43 @@ Free-form text is sent to the active project's session.
 - `npm test` — vitest
 - `npm run dev` — run the daemon
 - `npm run dry -- --demo` — offline walkthrough
+
+## Troubleshooting
+
+Start with `doctor`. Its lines map to the fix:
+
+| What you see | What to do |
+|---|---|
+| The daemon prints doctor lines and exits 1 | A prerequisite is missing; run `setup`, then `doctor` again. |
+| `signal-cli … missing` | `setup` downloads it under the data directory; without network run `scripts/install-signal-cli.ps1`. |
+| `config … missing` | `setup` links the phone and writes `config.toml`; it never overwrites an existing file. |
+| `config.toml has no account` | Add the `account = "+…"` line `setup` printed, or rerun `setup` after moving the old file away. |
+| `plugin stale` | `node dist/index.js plugin install`, then restart opencode. |
+| `plugin conflict` | Remove `<project>/.opencode/plugins/signal-connector.ts` — the global copy in `~/.config/opencode/plugins` is the one to keep. |
+| A task says the agent is unavailable | opencode is not running or the project is not open; open it, then retry. |
+| `heard:` is followed by a dropped-utterance note | The room was too quiet or the transcriber is not configured; check the `[voice]` section. |
+| A meeting refuses the link | `meet.providers` must name the host, and `meet.allow` must contain your identity; an empty list refuses everyone. |
+| No sound in a meeting | `doctor` for the voice binaries, check `synthesizer`, and confirm `voice.bargeIn` is not fighting you. |
+
+## Upgrade
+
+```bash
+npm install -g .          # or: npm install -g signal-connector, once published
+signal-connector plugin install   # replace a stale plugin copy
+signal-connector doctor           # confirm every step is ok
+```
+
+Then restart the daemon (and opencode, so it reloads the plugin). Config, the store and secrets stay
+where they were; `setup` only adds what is missing.
+
+## Uninstall
+
+1. Stop the daemon (Ctrl+C, or `pwsh scripts/stop.ps1` on Windows).
+2. `npm uninstall -g signal-connector` (or remove the checkout).
+3. Delete `~/.config/opencode/plugins/signal-connector.ts` (and any project copy).
+4. Delete the data directory: `%APPDATA%\SignalConnector` on Windows,
+   `~/.config/SignalConnector` elsewhere. This removes the store, logs and secrets; export anything
+   you want to keep first.
 
 ## Security
 
