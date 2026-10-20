@@ -3,7 +3,7 @@ title: 'Speak in the room'
 type: 'feature'
 ticket: '4'
 created: '2026-10-17'
-status: 'built'
+status: done
 baseline_revision: '864fa0c30fb9f76a44d4b04c8c4253cd13e793af'
 route: 'full'
 route_source: 'auto'

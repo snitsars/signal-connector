@@ -3,7 +3,7 @@ title: 'Ears and presence, out loud'
 type: 'feature'
 ticket: '6'
 created: '2026-10-19'
-status: 'built'
+status: done
 baseline_revision: '96106ad68798a5baa5be00ddf43c5bfbe8fa53d3'
 route: 'full'
 route_source: 'auto'

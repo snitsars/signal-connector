@@ -3,7 +3,7 @@ title: 'The gate that refuses before it joins'
 type: 'feature'
 ticket: '2'
 created: '2026-10-17'
-status: 'built'
+status: done
 baseline_revision: '41dc0c315f25aea69e30441f883ca93a0292425c'
 route: 'full'
 route_source: 'auto'

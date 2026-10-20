@@ -3,7 +3,7 @@ title: 'Package the daemon as an installable CLI'
 type: 'chore'
 ticket: '1'
 created: '2026-10-15'
-status: 'built'
+status: done
 baseline_revision: '2d08ac36a41e648448da9adb8d76493440088757'
 route: 'oneshot'
 route_source: 'auto'

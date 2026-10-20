@@ -3,7 +3,7 @@ title: 'Newcomer documentation'
 type: 'docs'
 ticket: '8'
 created: '2026-10-21'
-status: 'built'
+status: done
 baseline_revision: '700796cc52c8b3a47513cbc2c8559035bfd0e992'
 route: 'quick'
 route_source: 'auto'

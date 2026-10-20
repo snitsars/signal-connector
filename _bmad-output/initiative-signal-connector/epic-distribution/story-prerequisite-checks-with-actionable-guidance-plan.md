@@ -3,7 +3,7 @@ title: 'Prerequisite checks with actionable guidance'
 type: 'feature'
 ticket: '3'
 created: '2026-10-20'
-status: 'built'
+status: done
 baseline_revision: 'a5f43847898bf3b28da3d55e196131d00e6fac35'
 route: 'full'
 route_source: 'auto'

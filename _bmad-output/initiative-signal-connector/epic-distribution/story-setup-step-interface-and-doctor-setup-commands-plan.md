@@ -3,7 +3,7 @@ title: 'Setup-step interface and doctor/setup commands'
 type: 'feature'
 ticket: '2'
 created: '2026-10-20'
-status: 'built'
+status: done
 baseline_revision: '5236348358159ef14f6f7cb98f66d59739316045'
 route: 'full'
 route_source: 'auto'

@@ -3,7 +3,7 @@ title: 'Install end-to-end suite'
 type: 'test'
 ticket: '12'
 created: '2026-10-21'
-status: 'built'
+status: done
 baseline_revision: 'b18f9d6ab7fa3cc22a02378987f24d5e59375ee1'
 route: 'quick'
 route_source: 'auto'

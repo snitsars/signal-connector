@@ -3,7 +3,7 @@ title: 'Secrets that persist on every platform'
 type: 'feature'
 ticket: '7'
 created: '2026-10-20'
-status: 'built'
+status: done
 baseline_revision: '2f06b0d408369f88aeaf167886d7206d53847dd4'
 route: 'full'
 route_source: 'auto'

@@ -3,7 +3,7 @@ title: 'Announce permissions aloud, decide by text'
 type: 'feature'
 ticket: '5'
 created: '2026-10-17'
-status: 'built'
+status: done
 baseline_revision: 'da0e1102eaa63a9c4e86cf47b27ef201ca43c05e'
 route: 'full'
 route_source: 'auto'

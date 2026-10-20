@@ -3,7 +3,7 @@ title: 'opencode plugin install and update step'
 type: 'feature'
 ticket: '6'
 created: '2026-10-20'
-status: 'built'
+status: done
 baseline_revision: '5fa2dc29dd108c1488d5f39d92dcb7a25a0fa0c4'
 route: 'full'
 route_source: 'auto'
