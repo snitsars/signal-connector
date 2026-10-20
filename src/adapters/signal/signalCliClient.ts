@@ -508,7 +508,9 @@ export class SignalCliClient implements SignalPort {
     options?: SendOptions,
   ): Promise<OutgoingMessage> {
     await this.limiter.acquire();
-    this.opts.logger.debug("signal send", { text });
+    // The body may carry a meeting link, which is a credential: keep the debug
+    // line useful but never print a URL.
+    this.opts.logger.debug("signal send", { text: text.replace(/https?:\/\/\S+/gi, "<link>") });
     const result = await this.rpc<{ timestamp?: number }>("send", {
       ...this.targetFor(channelId),
       message: text,

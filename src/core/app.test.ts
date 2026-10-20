@@ -2110,6 +2110,82 @@ describe("voice in the meeting", () => {
     expect(ctx.signal.sent.at(-1)!.text).toContain("Room creation is off");
     await ctx.app.stop();
   });
+
+  it("refuses a stop from an identity that may not act", async () => {
+    await inRoom();
+    ctx.signal.emitMessage({ ...incoming("/meet stop"), sender: "+2000", delivery: "data" });
+    await tick();
+    await tick();
+    expect(ctx.store.getOpenMeeting()).not.toBeUndefined();
+    expect(ctx.signal.sent.some((m) => m.text.includes("authoris"))).toBe(true);
+    await ctx.app.stop();
+  });
+
+  it("does not stop another project's meeting from this group", async () => {
+    const projects = [
+      PROJECTS[0],
+      {
+        name: "other",
+        path: "/tmp/other",
+        meet: { allow: [{ id: "+1000", label: "+1000" }], providers: ["meet.jit.si"] },
+      },
+    ];
+    meeting = new FakeMeeting();
+    voice = new FakeVoice();
+    ctx = makeApp(projects, {}, undefined, meeting, reachable, undefined, voice);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.signal.emitMessage(incoming(`/meet ${LINK}`));
+    await tick();
+    await tick();
+    meeting.admit();
+    await tick();
+    await tick();
+
+    // Open the other project so the command arrives in a known group.
+    ctx.signal.emitMessage(incoming("/open other"));
+    await tick();
+    ctx.signal.emitMessage(incomingIn("group-2-other", "/meet stop"));
+    await tick();
+    await tick();
+
+    expect(ctx.store.getOpenMeeting()).not.toBeUndefined();
+    expect(
+      ctx.signal.sent.some((m) => m.text.includes("another project's group")),
+    ).toBe(true);
+    await ctx.app.stop();
+  });
+
+  it("refuses a create host that the provider list does not allow", async () => {
+    const projects = [
+      {
+        name: "demo",
+        path: "/tmp/demo",
+        session: "ses_pinned",
+        meet: {
+          allow: [{ id: "+1000" }],
+          providers: ["meet.jit.si"],
+          create: true,
+          createHost: "evil.example",
+        },
+      },
+    ];
+    meeting = new FakeMeeting();
+    voice = new FakeVoice();
+    ctx = makeApp(projects, {}, undefined, meeting, reachable, undefined, voice);
+    await ctx.app.start();
+    ctx.signal.emitMessage(incoming("/open demo"));
+    await tick();
+    ctx.signal.emitMessage(incoming("/meet start"));
+    await tick();
+    await tick();
+
+    expect(meeting.joins).toHaveLength(0);
+    expect(ctx.store.getOpenMeeting()).toBeUndefined();
+    expect(ctx.signal.sent.some((m) => m.text.includes("provider"))).toBe(true);
+    await ctx.app.stop();
+  });
 });
 
 describe("meeting telemetry, presence and the watchdog", () => {

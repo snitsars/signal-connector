@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decidePaste, extractMeetingLink, PROVIDER_HOSTS, type PasteInput } from "./gate.js";
+import { decidePaste, extractMeetingLink, isAllowedIdentity, PROVIDER_HOSTS, type PasteInput } from "./gate.js";
 
 const LINK = "https://meet.jit.si/room-abc";
 const ALLOW = [{ id: "+1000", label: "+1000" }];
@@ -174,6 +174,17 @@ describe("extractMeetingLink", () => {
     const onlyInfo =
       "Номери телефонів: https://meet.jit.si/static/dialInInfo.html?room=room-abc";
     expect(extractMeetingLink(onlyInfo, HOSTS)).toBeUndefined();
+    // The gate must not fall back to parsing the raw text after extraction fails.
+    expect(decidePaste(paste({ text: onlyInfo, providerHosts: HOSTS }))).toEqual({
+      ok: false,
+      category: "malformed-link",
+    });
+  });
+
+  it("refuses an empty allow-list on the sync path too", () => {
+    expect(
+      isAllowedIdentity({ delivery: "sync", sender: "+1000", allow: [] }),
+    ).toBe(false);
   });
 
   it("drops trailing punctuation around a bare link", () => {

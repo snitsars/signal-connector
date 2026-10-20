@@ -709,11 +709,6 @@ export class CoreApp {
       await this.reply("Usage: /meet <link or invitation>, or /meet stop");
       return;
     }
-    if (/^stop$/i.test(trimmed)) {
-      await this.stopMeeting();
-      return;
-    }
-
     const project = this.activeProject();
     if (!project) {
       await this.reply("No project here. Send /meet in a project's group.");
@@ -722,6 +717,33 @@ export class CoreApp {
 
     const configured = this.config.projects.find((p) => PROJECT_ID(p.name) === project.id);
     const meet = configured?.meet;
+
+    if (/^stop$/i.test(trimmed)) {
+      // Stopping is an operator action on the meeting that is actually open:
+      // the same identity rule as a paste, and only from its own group.
+      if (
+        !isAllowedIdentity({
+          delivery: msg?.delivery ?? "data",
+          sender: msg?.sender ?? "",
+          ...(msg?.senderUuid ? { senderUuid: msg.senderUuid } : {}),
+          allow: meet?.allow ?? [],
+        })
+      ) {
+        this.logger.info("meeting: stop refused", { project: project.name });
+        await this.refusePaste(project.name, { ok: false, category: "not-authorised" });
+        return;
+      }
+      const owner = this.activeMeeting?.projectId ?? this.store.getOpenMeeting()?.projectId;
+      if (owner && owner !== project.id) {
+        await this.reply(
+          "A meeting is running in another project's group. Send /meet stop there.",
+        );
+        return;
+      }
+      await this.stopMeeting();
+      return;
+    }
+
     const wantsCreate = /^(start|new)$/i.test(trimmed);
 
     let decision: PasteDecision;
@@ -747,7 +769,27 @@ export class CoreApp {
         return;
       }
       const name = `${meet.roomPrefix}-${crypto.randomBytes(9).toString("base64url").toLowerCase()}`;
-      createdLink = new URL(`/${name}`, `https://${meet.createHost}`);
+      // The created room follows the same provider policy as a paste, and the
+      // host may not smuggle credentials into the shared link.
+      const host = meet.createHost.trim().toLowerCase();
+      let created: URL;
+      try {
+        created = new URL(`/${name}`, `https://${host}`);
+      } catch {
+        await this.reply("`meet.createHost` is not a valid host.");
+        return;
+      }
+      const providers = (meet.providers ?? PROVIDER_HOSTS).map((h) => h.trim().toLowerCase());
+      if (
+        created.username ||
+        created.password ||
+        !providers.includes(created.hostname.toLowerCase())
+      ) {
+        this.logger.info("meeting: create host refused", { project: project.name });
+        await this.refusePaste(project.name, { ok: false, category: "foreign-provider" });
+        return;
+      }
+      createdLink = created;
       decision = { ok: true, link: createdLink };
     } else {
       // The gate runs before availability, before the claim and before any

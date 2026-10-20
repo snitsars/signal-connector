@@ -154,6 +154,15 @@ link that is quoted from someone else's message.
 Quick lens, 8 findings, plus 2 found while reading the diff myself. No intent gap and no plan
 fault: everything real is a patch, and one is rejected as out of scope.
 
+**Settled later (2026-10-21):** the header's "ten findings" could not be reconstructed, so the
+whole surface was reviewed again from scratch (not a diff review): `src/core/gate.ts`, the `/meet`
+command path, the URL extraction and the browser hand-off. That fresh pass found five real issues —
+an unauthenticated, unscoped `/meet stop`; the `?? input.text` fallback re-admitting the dial-in
+page; `/meet start` bypassing the provider allow-list (and accepting a host with credentials); an
+empty allow-list passing the sync path in `isAllowedIdentity`; and outgoing meeting URLs reaching
+the adapter's debug log. All five are patched with tests. The two lost findings remain unknowable,
+but the surface has now been reviewed end to end.
+
 - **uuid-first is not implemented; list order decides** — `high`, patch. Verified in
   `resolveIdentity`: the loop breaks on `byUuid || byNumber`, so an earlier number entry beats a
   later uuid one — a revoked uuid entry is bypassed when a live number entry precedes it, and a

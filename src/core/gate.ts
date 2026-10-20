@@ -108,7 +108,9 @@ export function decidePaste(input: PasteInput): PasteDecision {
   const identity = resolveIdentity(input, allow);
   if (!identity.ok) return { ok: false, category: "not-authorised", ...(identity.detail ? { detail: identity.detail } : {}) };
 
-  const link = parseLink(extractMeetingLink(input.text, input.providerHosts) ?? input.text);
+  // Extraction is the only way in: when the message contains no room link (for
+  // example only the dial-in info page), this is malformed rather than a room.
+  const link = parseLink(extractMeetingLink(input.text, input.providerHosts) ?? "");
   if (!link) return { ok: false, category: "malformed-link" };
 
   if (!isAllowedHost(link, input.providerHosts)) {
@@ -126,6 +128,8 @@ export function isAllowedIdentity(input: {
   allow: ReadonlyArray<MeetIdentity>;
   now?: number;
 }): boolean {
+  // Fail-closed like a paste: an empty list refuses the operator too.
+  if (input.allow.length === 0) return false;
   return resolveIdentity(input, input.allow).ok;
 }
 
