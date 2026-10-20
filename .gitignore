@@ -56,3 +56,4 @@ obj/
 tmp/
 temp/
 *.tmp
+*.tgz

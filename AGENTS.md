@@ -6,7 +6,7 @@ Agent instructions for the **SignalConnector** repository. Keep this block small
 
 SignalConnector is a personal, Windows-first background service that bridges a Signal chat to a
 local **opencode** coding agent, so one operator can start tasks, watch progress, approve
-permission prompts, and receive results from their phone. TypeScript / ESM / Node ≥ 20.
+permission prompts, and receive results from their phone. TypeScript / ESM / Node ≥ 22.13.
 
 BMAD planning artifacts live in `_bmad-output/initiative-signal-connector/`:
 `brief-*`, `prd-*`, `architecture-*` (the spine), and the ticket tree (`epic-*` folders).
