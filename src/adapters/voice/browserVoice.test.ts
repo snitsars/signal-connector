@@ -493,7 +493,7 @@ describe("BrowserVoice speech", () => {
   });
 
   it("stops mid-sentence when the operator speaks and drops the queued answer", async () => {
-    const v = speaking();
+    const v = speaking({ ...BASE, bargeInMs: 400 });
     dirs.push(v.workDir);
     const handle = await v.start();
     await v.voice.whenIdle();
@@ -538,7 +538,7 @@ describe("BrowserVoice speech", () => {
   });
 
   it("does not stop on one noise spike but does on sustained speech", async () => {
-    const v = speaking();
+    const v = speaking({ ...BASE, bargeInMs: 400 });
     dirs.push(v.workDir);
     const handle = await v.start();
     await v.voice.whenIdle();
@@ -608,7 +608,7 @@ describe("BrowserVoice speech", () => {
   });
 
   it("interrupts a clip still being synthesised even when the page is idle", async () => {
-    const v = speaking();
+    const v = speaking({ ...BASE, bargeInMs: 400 });
     dirs.push(v.workDir);
     const handle = await v.start();
     await v.voice.whenIdle();

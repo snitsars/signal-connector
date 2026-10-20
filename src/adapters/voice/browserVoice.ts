@@ -514,6 +514,9 @@ export class BrowserVoice implements VoicePort {
       if (!active) return;
       this.logger.info("voice: the operator spoke; stopping the answer");
       await this.stopSpeech();
+      // The burst that stopped the clip must not immediately stop the next one:
+      // without this reset the same speech triggered a second barge-in.
+      this.loudMs = 0;
     } finally {
       this.bargeInPending = false;
     }

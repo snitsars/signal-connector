@@ -93,7 +93,7 @@ export const ConfigSchema = z.object({
       /** At most one acknowledgement per this window, so fragments do not nag. */
       ackCooldownMs: z.number().int().nonnegative().default(4_000),
       /** Sustained operator speech before the answer is stopped, in milliseconds. */
-      bargeInMs: z.number().int().positive().default(400),
+      bargeInMs: z.number().int().positive().default(900),
       /** The Windows system voice to speak with; empty picks the default. */
       voiceName: z.string().default(""),
       /** SAPI speaking rate, -10..10; 0 is the voice's own pace. */
@@ -113,7 +113,7 @@ export const ConfigSchema = z.object({
       silenceMs: 900,
       maxUtteranceMs: 15_000,
       ackCooldownMs: 4_000,
-      bargeInMs: 400,
+      bargeInMs: 900,
       voiceName: "",
       rate: 0,
       maxSpeechChars: 600,
