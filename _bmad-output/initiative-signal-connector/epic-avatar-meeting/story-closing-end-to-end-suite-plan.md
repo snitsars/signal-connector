@@ -3,7 +3,7 @@ title: 'Closing end-to-end suite'
 type: 'feature'
 ticket: '8'
 created: '2026-10-19'
-status: 'built'
+status: done
 baseline_revision: '56657e1b3b1cedd052524f3045f861c0b109d750'
 route: 'full'
 route_source: 'auto'

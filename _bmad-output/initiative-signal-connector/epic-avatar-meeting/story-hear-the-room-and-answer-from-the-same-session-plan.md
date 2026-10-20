@@ -3,7 +3,7 @@ title: 'Hear the room and answer from the same session'
 type: 'feature'
 ticket: '3'
 created: '2026-10-17'
-status: 'built'
+status: done
 baseline_revision: '7111135c3827966035fc237e35b91d6c040ab4f3'
 route: 'full'
 route_source: 'auto'
