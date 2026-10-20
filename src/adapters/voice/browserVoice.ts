@@ -348,8 +348,9 @@ export class BrowserVoice implements VoicePort {
 
     // The operator's own voice outranks the avatar, but a single noise spike
     // does not: only sustained speech stops the clip. The page says whether it
-    // is really speaking, so a quiet room is not mistaken for a stop.
-    if (level >= this.config.rmsFloor) {
+    // is really speaking, so a quiet room is not mistaken for a stop. The whole
+    // guard can be turned off (voice.bargeIn=false) when the room is noisy.
+    if (this.config.bargeIn && level >= this.config.rmsFloor) {
       this.loudMs += (samples.length * 1000) / SAMPLE_RATE;
       if (this.loudMs >= this.config.bargeInMs) void this.bargeIn(listening.input);
     } else {

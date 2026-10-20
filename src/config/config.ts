@@ -118,6 +118,8 @@ export const ConfigSchema = z.object({
       ackCooldownMs: z.number().int().nonnegative().default(4_000),
       /** Sustained operator speech before the answer is stopped, in milliseconds. */
       bargeInMs: z.number().int().positive().default(900),
+    /** Let the operator's voice stop the avatar mid-sentence. */
+    bargeIn: z.boolean().default(true),
       /** The Windows system voice to speak with; empty picks the default. */
       voiceName: z.string().default(""),
       /** SAPI speaking rate, -10..10; 0 is the voice's own pace. */
