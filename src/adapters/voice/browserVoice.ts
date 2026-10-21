@@ -221,6 +221,9 @@ export class BrowserVoice implements VoicePort {
             model: options.config.ttsModel,
             voice: options.config.ttsVoice,
             format: options.config.ttsFormat,
+            ...(options.config.ttsInstructions
+              ? { instructions: options.config.ttsInstructions }
+              : {}),
             apiKey: options.ttsKey ?? "",
             workDir: options.workDir,
           })

@@ -84,6 +84,8 @@ export const ConfigSchema = z.object({
     ttsModel: z.string().default("gpt-4o-mini-tts"),
     ttsVoice: z.string().default("alloy"),
     ttsFormat: z.enum(["wav", "mp3"]).default("wav"),
+    /** Style guidance for providers that accept it (OpenAI gpt-4o-mini-tts). */
+    ttsInstructions: z.string().default(""),
     /** Which recogniser to use: auto (sherpa, else whisper), or a forced one. */
     transcriber: z.enum(["auto", "whisper", "sherpa", "http", "nvidia"]).default("auto"),
     /** NVIDIA Riva gRPC host and the hosted whisper-large-v3 function. */

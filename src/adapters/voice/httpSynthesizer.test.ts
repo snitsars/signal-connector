@@ -96,6 +96,21 @@ describe("HttpSynthesizer", () => {
     });
   });
 
+  it("passes style instructions when the provider accepts them", async () => {
+    let body: Record<string, unknown> = {};
+    const voice = new HttpSynthesizer({
+      ...BASE,
+      workDir: workDir(),
+      instructions: "warm and conversational",
+      fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+        body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(Buffer.from("RIFF"), { status: 200 });
+      }) as typeof fetch,
+    });
+    await voice.synthesize("Привіт.");
+    expect(body.instructions).toBe("warm and conversational");
+  });
+
   it("is unconfigured without a url and a key", () => {
     expect(new HttpSynthesizer({ ...BASE, workDir: workDir(), apiKey: "" }).configured).toBe(false);
     expect(new HttpSynthesizer({ ...BASE, workDir: workDir(), url: "" }).configured).toBe(false);

@@ -17,6 +17,8 @@ export interface HttpSynthesizerOptions {
   voice: string;
   /** `wav` is decoded by every browser; `mp3` also works and is smaller. */
   format?: string;
+  /** Style guidance some providers accept (OpenAI gpt-4o-mini-tts). */
+  instructions?: string;
   apiKey: string;
   workDir: string;
   timeoutMs?: number;
@@ -61,6 +63,9 @@ export class HttpSynthesizer implements Synthesizer {
           voice: this.options.voice,
           input: text,
           response_format: this.options.format ?? "wav",
+          ...(this.options.instructions?.trim()
+            ? { instructions: this.options.instructions.trim() }
+            : {}),
         }),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
