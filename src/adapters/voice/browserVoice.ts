@@ -111,7 +111,24 @@ export function applyPronunciations(
   return out;
 }
 
-/** What the page says about the speech it is playing. */
+/**
+ * Whether a transcript is plausibly in the meeting's language. A recogniser on
+ * room tone can answer in Korean, Spanish or Arabic; those become tasks and
+ * confuse the session, so a Cyrillic language requires Cyrillic and any foreign
+ * script is refused outright. "auto" trusts whatever came back.
+ */
+export function matchesLanguage(text: string, language: string): boolean {
+  const lang = language.trim().toLowerCase();
+  if (!lang || lang === "auto") return true;
+  const foreign =
+    /[\u0590-\u05FF\u0600-\u06FF\u0900-\u097F\u3040-\u30FF\u4E00-\u9FFF\uAC00-\uD7AF]/;
+  if (foreign.test(text)) return false;
+  if (/^(uk|ru|be|bg|sr|mk)/.test(lang)) return /[\u0400-\u04FF]/.test(text);
+  if (/^(en|de|fr|es|it|pt|nl|pl|cs|sk|sv|da|no|fi|tr|id|vi|ms|ro|hu)/.test(lang)) {
+    return /[A-Za-z]/.test(text);
+  }
+  return true;
+}
 export interface SpeechState {
   speaking: boolean;
   queued: number;
@@ -715,6 +732,11 @@ export class BrowserVoice implements VoicePort {
     }
     if (!result.text) {
       this.countDrop("blank transcript");
+      return;
+    }
+    if (!matchesLanguage(result.text, this.config.language)) {
+      // Noise that a recogniser answers in another language is not a question.
+      this.countDrop("the transcript is not in the meeting language");
       return;
     }
     input.onUtterance({

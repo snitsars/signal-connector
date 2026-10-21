@@ -10,6 +10,7 @@ import {
   applyPronunciations,
   BrowserVoice,
   capSpeech,
+  matchesLanguage,
   type SpeechSink,
   type SpeechState,
 } from "./browserVoice.js";
@@ -712,5 +713,22 @@ describe("applyPronunciations", () => {
 
   it("does not touch a word inside another word", () => {
     expect(applyPronunciations("opencodex", { opencode: "опенкод" })).toBe("opencodex");
+  });
+});
+
+describe("matchesLanguage", () => {
+  it("accepts Ukrainian and mixed Ukrainian-English", () => {
+    expect(matchesLanguage("Привіт, як справи?", "uk")).toBe(true);
+    expect(matchesLanguage("Привіт, opencode і SignalConnector", "uk")).toBe(true);
+  });
+
+  it("refuses a hallucination in another language", () => {
+    expect(matchesLanguage("T'estás?", "uk")).toBe(false);
+    expect(matchesLanguage("어디까지 했더라?", "uk")).toBe(false);
+    expect(matchesLanguage("تعليمهم.", "uk")).toBe(false);
+  });
+
+  it("trusts the recogniser when the language is auto", () => {
+    expect(matchesLanguage("anything", "auto")).toBe(true);
   });
 });
