@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { SynthesizeResult, Synthesizer } from "./sapi.js";
+import { repairWavSizes } from "./wav.js";
 
 export interface HttpSynthesizerOptions {
   url: string;
@@ -95,7 +96,7 @@ export class HttpSynthesizer implements Synthesizer {
 
     let audio: Buffer;
     try {
-      audio = Buffer.from(await response.arrayBuffer());
+      audio = repairWavSizes(Buffer.from(await response.arrayBuffer()));
     } catch {
       return { ok: false, reason: "the speech service returned no audio" };
     }

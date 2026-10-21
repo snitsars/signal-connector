@@ -93,7 +93,8 @@ export const ConfigSchema = z.object({
     rivaFunctionId: z.string().default("b702f636-f60c-4a3d-a6f4-f3568c13bd7d"),
     /** Riva language code; Ukrainian is uk-UA. */
     rivaLanguage: z.string().default("uk-UA"),
-    /** OpenAI-compatible /v1/audio/transcriptions endpoint; `${model}` not needed. */
+    /** Name of the secret holding the hosted transcription key. */
+    transcriptionKeySecret: z.string().default("transcription-api-key"),
     httpTranscriptionUrl: z.string().default(""),
     /** Model field sent to that endpoint, e.g. openai/whisper-large-v3. */
     httpTranscriptionModel: z.string().default("openai/whisper-large-v3"),

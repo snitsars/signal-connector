@@ -42,12 +42,30 @@ export function pcmToWav(samples: Int16Array, sampleRate = SAMPLE_RATE): Buffer 
 }
 
 /**
- * Peak-normalise speech before transcription. A phone or headset path can arrive
- * very quiet, and the transcriber's voice-activity filter then rejects real
- * speech as non-speech — measured live at roughly a fifteenth of full scale.
- * Near-silence stays untouched (the filter must still reject room tone), and
- * the gain is capped so a faint clip cannot turn into amplified noise.
+ * Repair a streamed WAV header. Some providers (OpenAI's speech endpoint) send
+ * the canonical 44-byte header but leave the RIFF and data sizes at
+ * 0xFFFFFFFF; Chrome's decodeAudioData then refuses the clip. The bytes are
+ * already complete here, so the sizes can be filled in.
  */
+export function repairWavSizes(wav: Buffer): Buffer {
+  if (
+    wav.length < WAV_HEADER_BYTES ||
+    wav.toString("ascii", 0, 4) !== "RIFF" ||
+    wav.toString("ascii", 8, 12) !== "WAVE"
+  ) {
+    return wav;
+  }
+  const dataBytes = wav.length - WAV_HEADER_BYTES;
+  const dataSize = wav.readUInt32LE(40);
+  const riffSize = wav.readUInt32LE(4);
+  if (dataSize === 0xffffffff || dataSize > dataBytes) {
+    wav.writeUInt32LE(dataBytes, 40);
+  }
+  if (riffSize === 0xffffffff || riffSize > 36 + dataBytes) {
+    wav.writeUInt32LE(36 + dataBytes, 4);
+  }
+  return wav;
+}
 export function normalizeSamples(
   samples: Int16Array,
   options: { targetPeak?: number; minimumPeak?: number; maxGain?: number } = {},

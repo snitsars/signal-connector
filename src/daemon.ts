@@ -125,7 +125,7 @@ export async function runDaemon(): Promise<number> {
   // place, and an environment variable is a convenience for a quick trial.
   // It never reaches the config file, a log line or an error message.
   const transcriptionKey =
-    (await secrets.get("transcription-api-key")) ??
+    (await secrets.get(config.voice.transcriptionKeySecret)) ??
     process.env.TRANSCRIPTION_API_KEY ??
     "";
   const ttsKey = (await secrets.get("tts-api-key")) ?? process.env.TTS_API_KEY ?? "";

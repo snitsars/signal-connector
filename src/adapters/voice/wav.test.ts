@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { SAMPLE_RATE } from "./pcm.js";
-import { normalizeSamples, pcmToWav, WAV_HEADER_BYTES, wavHeader } from "./wav.js";
+import { normalizeSamples, pcmToWav, repairWavSizes, WAV_HEADER_BYTES, wavHeader } from "./wav.js";
 
 describe("wavHeader", () => {
   it("writes a canonical 16 kHz mono 16-bit PCM header", () => {
@@ -18,6 +18,33 @@ describe("wavHeader", () => {
     expect(header.readUInt16LE(34)).toBe(16); // bits
     expect(header.toString("ascii", 36, 40)).toBe("data");
     expect(header.readUInt32LE(40)).toBe(200);
+  });
+});
+
+describe("repairWavSizes", () => {
+  const streamed = (payload: number): Buffer => {
+    const wav = Buffer.concat([wavHeader(payload), Buffer.alloc(payload, 1)]);
+    // What OpenAI's endpoint sends: canonical header, sizes left at 0xFFFFFFFF.
+    wav.writeUInt32LE(0xffffffff, 4);
+    wav.writeUInt32LE(0xffffffff, 40);
+    return wav;
+  };
+
+  it("fills in the sizes of a streamed WAV so the page can decode it", () => {
+    const wav = repairWavSizes(streamed(100));
+    expect(wav.readUInt32LE(40)).toBe(100);
+    expect(wav.readUInt32LE(4)).toBe(136);
+  });
+
+  it("leaves a correct header alone", () => {
+    const wav = Buffer.concat([wavHeader(50), Buffer.alloc(50, 1)]);
+    const before = Buffer.from(wav);
+    expect(repairWavSizes(wav).equals(before)).toBe(true);
+  });
+
+  it("leaves non-WAV audio alone", () => {
+    const mp3 = Buffer.from("ID3 not a wav");
+    expect(repairWavSizes(mp3)).toBe(mp3);
   });
 });
 
