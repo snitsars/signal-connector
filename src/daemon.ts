@@ -129,6 +129,8 @@ export async function runDaemon(): Promise<number> {
     process.env.TRANSCRIPTION_API_KEY ??
     "";
   const ttsKey = (await secrets.get("tts-api-key")) ?? process.env.TTS_API_KEY ?? "";
+  const azureKey =
+    (await secrets.get("azure-speech-key")) ?? process.env.AZURE_SPEECH_KEY ?? "";
   logger.info("voice: transcriber", { kind: config.voice.transcriber });
   logger.info("voice: synthesizer", { kind: config.voice.synthesizer });
 
@@ -138,6 +140,7 @@ export async function runDaemon(): Promise<number> {
     workDir: voiceDir,
     ...(transcriptionKey ? { transcriptionKey } : {}),
     ...(ttsKey ? { ttsKey } : {}),
+    ...(azureKey ? { azureKey } : {}),
     // Speech goes back into the room's own synthetic microphone, over the CDP
     // session the meeting already has open.
     sink: {

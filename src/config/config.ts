@@ -73,8 +73,12 @@ export const ConfigSchema = z.object({
       piperVoicePath: z.string().default(""),
     /** Piper's speaking pace; 1 is the model's own, higher is slower. */
     piperLengthScale: z.number().positive().default(1.0),
-    /** Which voice: auto (Piper if fetched, else SAPI), piper, sapi, edge or http. */
-    synthesizer: z.enum(["auto", "piper", "sapi", "edge", "http"]).default("auto"),
+    /** Which voice: auto (Piper if fetched, else SAPI), piper, sapi, edge, azure or http. */
+    synthesizer: z.enum(["auto", "piper", "sapi", "edge", "azure", "http"]).default("auto"),
+    /** Azure Speech region and Ukrainian neural voice. */
+    azureRegion: z.string().default("northeurope"),
+    azureVoice: z.string().default("uk-UA-PolinaNeural"),
+    azureRate: z.string().default("-5%"),
     /** Microsoft Edge neural voice for the "edge" synthesizer. */
     edgeVoice: z.string().default("uk-UA-OstapNeural"),
     /** Edge prosody, e.g. "+0%". */

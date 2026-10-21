@@ -40,6 +40,7 @@ import { SherpaTranscriber } from "./sherpa.js";
 import { HttpTranscriber } from "./httpTranscriber.js";
 import { HttpSynthesizer } from "./httpSynthesizer.js";
 import { EdgeSynthesizer } from "./edge.js";
+import { AzureSynthesizer } from "./azure.js";
 import { RivaTranscriber } from "./riva.js";
 import { normalizeSamples, pcmToWav } from "./wav.js";
 import {
@@ -176,6 +177,8 @@ export interface BrowserVoiceOptions {
   transcriptionKey?: string;
   /** The hosted speech key, resolved from the secret store by index.ts. */
   ttsKey?: string;
+  /** The Azure Speech key, resolved from the secret store by the daemon. */
+  azureKey?: string;
 }
 
 /** One listening session: the accumulated audio between two cuts. */
@@ -250,7 +253,15 @@ export class BrowserVoice implements VoicePort {
               rate: options.config.edgeRate,
               workDir: options.workDir,
             })
-          : this.synthChoice() === "piper"
+          : this.synthChoice() === "azure"
+            ? new AzureSynthesizer({
+                key: options.azureKey ?? "",
+                region: options.config.azureRegion,
+                voice: options.config.azureVoice,
+                rate: options.config.azureRate,
+                workDir: options.workDir,
+              })
+            : this.synthChoice() === "piper"
           ? new PiperSynthesizer({
               command: options.config.piperPath,
               voicePath: options.config.piperVoicePath,
@@ -305,9 +316,10 @@ export class BrowserVoice implements VoicePort {
   }
 
   /** Pick the configured voice; "auto" keeps the best local one. */
-  private synthChoice(): "http" | "edge" | "piper" | "sapi" {
+  private synthChoice(): "http" | "azure" | "edge" | "piper" | "sapi" {
     const choice = this.config.synthesizer;
     if (choice === "http") return "http";
+    if (choice === "azure") return "azure";
     if (choice === "edge") return "edge";
     if (choice === "piper") return "piper";
     if (choice === "sapi") return "sapi";
