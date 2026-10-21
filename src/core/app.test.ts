@@ -2070,6 +2070,25 @@ describe("voice in the meeting", () => {
     await ctx.app.stop();
   });
 
+  it("keeps one session for every question of the same meeting", async () => {
+    await inRoom();
+    voice.utterance("перше питання");
+    await tick();
+    await tick();
+    const first = ctx.agent.started.at(-1)!;
+
+    voice.utterance("друге питання");
+    await tick();
+    await tick();
+    const second = ctx.agent.started.at(-1)!;
+
+    expect(first.sessionId).not.toBe("ses_pinned");
+    expect(second.sessionId).toBe(first.sessionId);
+    // The project's pinned session is untouched by the voice lane.
+    expect(ctx.store.getSession("demo")).toBe("ses_pinned");
+    await ctx.app.stop();
+  });
+
   it("creates a room and shares its link when creation is enabled", async () => {
     const projects = [
       {

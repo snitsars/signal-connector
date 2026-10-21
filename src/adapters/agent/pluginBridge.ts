@@ -43,15 +43,19 @@ export class PluginBridgeAgent implements AgentPort {
   async startTask(input: StartTaskInput): Promise<{ sessionId: string }> {
     const conn = this.hub.get(input.project.id);
     if (!conn) throw new Error(`no plugin connected for project ${input.project.id}`);
+    // Ask the plugin for the session before the prompt: then the service knows
+    // which session ran the task, can reuse it, and never leaks one session per
+    // utterance. Without a sessionId the plugin used to create an unreported one.
+    const sessionId = input.sessionId ?? (await this.newSession(input.project)).sessionId;
     conn.send({
       type: "command",
       kind: "prompt",
       taskId: input.taskId,
       prompt: input.prompt,
-      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+      ...(sessionId ? { sessionId } : {}),
     });
     this.taskProject.set(input.taskId, input.project.id);
-    return { sessionId: input.sessionId ?? "" };
+    return { sessionId };
   }
 
   async newSession(project: Project): Promise<{ sessionId: string }> {

@@ -107,6 +107,16 @@ export const ConfigSchema = z.object({
     greeting: z.string().default("Привіт, я під'єднався. Готовий до роботи."),
     /** Said once when the operator asks the meeting to stop. Empty says nothing. */
     farewell: z.string().default("До зустрічі!"),
+    /** Words the voice should say the way a Ukrainian speaker would. */
+    pronunciations: z.record(z.string()).default({
+      SignalConnector: "Сигнал Конектор",
+      signalconnector: "Сигнал Конектор",
+      opencode: "опенкод",
+      GitHub: "Ґітгаб",
+      API: "Ей-Пі-Ай",
+      npm: "ен-пі-ем",
+      JSON: "джейсон",
+    }),
       /** RMS below which audio counts as room tone, not speech (0..1). */
       rmsFloor: z.number().default(0.01),
       /** A window shorter than this is noise, not an utterance to answer. */

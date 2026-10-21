@@ -7,6 +7,7 @@ import { nullLogger } from "../../logging/logger.js";
 import type { Utterance } from "../../core/ports.js";
 import {
   ACK_TEXT,
+  applyPronunciations,
   BrowserVoice,
   capSpeech,
   type SpeechSink,
@@ -694,5 +695,22 @@ describe("BrowserVoice speech", () => {
     await handle.stopSpeaking();
     expect(v.sink.stops).toBe(1);
     expect(v.sink.speaking).toBe(false);
+  });
+});
+
+describe("applyPronunciations", () => {
+  it("says borrowed names the way the Ukrainian voice should", () => {
+    expect(
+      applyPronunciations("SignalConnector і opencode, API, npm", {
+        SignalConnector: "Сигнал Конектор",
+        opencode: "опенкод",
+        API: "Ей-Пі-Ай",
+        npm: "ен-пі-ем",
+      }),
+    ).toBe("Сигнал Конектор і опенкод, Ей-Пі-Ай, ен-пі-ем");
+  });
+
+  it("does not touch a word inside another word", () => {
+    expect(applyPronunciations("opencodex", { opencode: "опенкод" })).toBe("opencodex");
   });
 });

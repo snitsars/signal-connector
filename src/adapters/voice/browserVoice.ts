@@ -88,6 +88,29 @@ export function speakable(text: string): string {
     .trim();
 }
 
+/**
+ * Say borrowed names the way a Ukrainian speaker would. A uk-UA voice reading
+ * "SignalConnector" letter by letter is the clearest example of a correct word
+ * sounding wrong; the map is configuration, so an operator can add their own
+ * project and vendor names without touching code.
+ */
+export function applyPronunciations(
+  text: string,
+  pronunciations: Readonly<Record<string, string>>,
+): string {
+  let out = text;
+  for (const [from, to] of Object.entries(pronunciations)) {
+    const needle = from.trim();
+    if (!needle || !to.trim()) continue;
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(
+      new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "giu"),
+      to,
+    );
+  }
+  return out;
+}
+
 /** What the page says about the speech it is playing. */
 export interface SpeechState {
   speaking: boolean;
@@ -458,7 +481,8 @@ export class BrowserVoice implements VoicePort {
 
   /** Speak an answer; a cap keeps a long report out of the room's ears. */
   private speak(input: StartListeningInput, text: string): Promise<void> {
-    const capped = capSpeech(speakable(text), this.config.maxSpeechChars);
+    const prepared = applyPronunciations(speakable(text), this.config.pronunciations);
+    const capped = capSpeech(prepared, this.config.maxSpeechChars);
     if (!capped) return Promise.resolve();
     return this.enqueueSpeech(input, async () => {
       const result = await this.synthesizer.synthesize(capped);
@@ -504,6 +528,9 @@ export class BrowserVoice implements VoicePort {
         if (generation !== this.speechGeneration) return;
         if (this.sink?.epoch && this.sink.epoch() !== epoch) return;
         await this.playClip(input, clip.base64, epoch);
+        // Evidence for "I saw the answer but heard nothing": the clip reached
+        // the page, without printing any of the text.
+        this.logger.info("voice: spoke a clip");
       } finally {
         // No audio outlives the page having the clip.
         if (clip?.wavPath) this.discardClip(clip.wavPath);
