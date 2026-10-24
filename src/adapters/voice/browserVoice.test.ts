@@ -169,6 +169,7 @@ function speaking(
   logger = nullLogger(),
   englishSynthesizer?: StubSynthesizer,
   streamingTranscriber?: StreamingTranscription,
+  promptlessTranscriber?: Transcriber,
 ) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "voice-"));
   const transcriber = new StubTranscriber();
@@ -182,6 +183,7 @@ function speaking(
     synthesizer,
     ...(englishSynthesizer ? { englishSynthesizer } : {}),
     ...(streamingTranscriber ? { streamingTranscriber } : {}),
+    ...(promptlessTranscriber ? { promptlessTranscriber } : {}),
     sink,
   });
   const utterances: Utterance[] = [];
@@ -300,6 +302,30 @@ describe("BrowserVoice", () => {
 
     expect(v.voice.drops).toBe(1);
     expect(v.utterances).toHaveLength(0);
+  });
+
+  it("retries without the prompt when the prompt is what came back", async () => {
+    const prompt = "SignalConnector, opencode, GitHub, Jitsi";
+    const promptless = new StubTranscriber();
+    promptless.result = { ok: true, text: "відкрий SignalConnector" };
+    const v = speaking(
+      { ...BASE, transcriptionPrompt: prompt },
+      nullLogger(),
+      undefined,
+      undefined,
+      promptless,
+    );
+    dirs.push(v.workDir);
+    v.transcriber.result = { ok: true, text: prompt };
+    await v.start();
+    for (let i = 0; i < 3; i++) v.voice.push(speechFrame());
+    for (let i = 0; i < 9; i++) v.voice.push(silenceFrame());
+    await v.voice.whenIdle();
+
+    expect(promptless.calls).toHaveLength(1);
+    expect(v.utterances.map((utterance) => utterance.text)).toEqual([
+      "відкрий SignalConnector",
+    ]);
   });
 
   it("reports the room's level as it hears it", async () => {

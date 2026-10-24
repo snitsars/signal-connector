@@ -302,6 +302,12 @@ export interface BrowserVoiceOptions {
   englishSynthesizer?: Synthesizer;
   /** Injectable for tests: the streaming recogniser used instead of the WAV. */
   streamingTranscriber?: StreamingTranscription;
+  /**
+   * The same batch recogniser without the vocabulary prompt. A hosted model
+   * sometimes answers with the prompt itself on unclear audio; retrying the same
+   * WAV without the hint recovers the words instead of dropping the utterance.
+   */
+  promptlessTranscriber?: Transcriber;
 }
 
 /** One listening session: the accumulated audio between two cuts. */
@@ -327,6 +333,11 @@ export class BrowserVoice implements VoicePort {
    * A failure always falls back to `transcriber`.
    */
   private readonly streamingTranscriber: StreamingTranscription | undefined;
+  /**
+   * The same recogniser with no vocabulary hint; used only to retry a transcript
+   * that came back as the hint itself.
+   */
+  private readonly promptlessTranscriber: Transcriber | undefined;
   private readonly synthesizer: Synthesizer;
   /**
    * The English voice for Latin segments (product names, quoted English) when
@@ -463,6 +474,19 @@ export class BrowserVoice implements VoicePort {
               ...(options.config.language ? { language: options.config.language } : {}),
               logger: options.logger,
             }));
+    // A prompt helps names (measured on Ukrainian clips) but is echoed back on
+    // unclear audio; this copy exists only to retry that case without it.
+    this.promptlessTranscriber =
+      options.promptlessTranscriber ??
+      (hosted && this.config.transcriptionPrompt.trim()
+        ? new HttpTranscriber({
+            url: options.config.httpTranscriptionUrl,
+            model: options.config.httpTranscriptionModel,
+            language: options.config.httpTranscriptionLanguage,
+            prompt: "",
+            apiKey: options.transcriptionKey ?? "",
+          })
+        : undefined);
     // Streaming is an optimisation over the batch recogniser above; without a
     // key or without the feature enabled, the WAV path stays in charge.
     this.streamingTranscriber =
@@ -984,6 +1008,17 @@ export class BrowserVoice implements VoicePort {
           });
         }
         result = await this.transcriber.transcribe(wavPath);
+        // The prompt is a strong hint and can come back instead of the speech.
+        // The same bytes without it often recover the real words.
+        if (
+          result.ok &&
+          echoesPrompt(result.text, this.config.transcriptionPrompt) &&
+          this.promptlessTranscriber?.configured
+        ) {
+          this.logger.debug("voice: retrying without the vocabulary prompt");
+          const retry = await this.promptlessTranscriber.transcribe(wavPath);
+          if (retry.ok) result = retry;
+        }
       }
     } catch (err: unknown) {
       result = { ok: false as const, reason: `transcription failed: ${String(err)}` };
@@ -1031,6 +1066,9 @@ export class BrowserVoice implements VoicePort {
       speechMs,
       chars: result.text.length,
       via,
+      // A very low level explains a wrong transcript; a healthy level points at
+      // the model, not the microphone.
+      rms: Number(rms(samples).toFixed(3)),
     });
     input.onUtterance({
       text: result.text,
