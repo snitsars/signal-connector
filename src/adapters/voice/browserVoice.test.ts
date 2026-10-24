@@ -11,6 +11,7 @@ import {
   BrowserVoice,
   capSpeech,
   matchesLanguage,
+  planSpeech,
   type SpeechSink,
   type SpeechState,
 } from "./browserVoice.js";
@@ -160,17 +161,18 @@ function makeVoice(config = BASE) {
 }
 
 /** A voice with a fake synthesiser and a fake player, sharing one temp dir. */
-function speaking(config = BASE) {
+function speaking(config = BASE, logger = nullLogger(), englishSynthesizer?: StubSynthesizer) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "voice-"));
   const transcriber = new StubTranscriber();
   const synthesizer = new StubSynthesizer(workDir);
   const sink = new StubSink();
   const voice = new BrowserVoice({
     config,
-    logger: nullLogger(),
+    logger,
     workDir,
     transcriber,
     synthesizer,
+    ...(englishSynthesizer ? { englishSynthesizer } : {}),
     sink,
   });
   const utterances: Utterance[] = [];
@@ -730,5 +732,118 @@ describe("matchesLanguage", () => {
 
   it("trusts the recogniser when the language is auto", () => {
     expect(matchesLanguage("anything", "auto")).toBe(true);
+  });
+});
+
+/** A logger that keeps every info line, so a test can read the timings. */
+function recordingLogger(): { logger: never; lines: Array<{ msg: string; fields?: Record<string, unknown> }> } {
+  const lines: Array<{ msg: string; fields?: Record<string, unknown> }> = [];
+  const logger = {
+    debug: () => {},
+    info: (msg: string, fields?: Record<string, unknown>) => lines.push({ msg, fields }),
+    warn: () => {},
+    error: () => {},
+  };
+  return { logger: logger as never, lines };
+}
+
+describe("turn metrics", () => {
+  it("logs the synthesis and playback cost of a spoken clip", async () => {
+    const { logger, lines } = recordingLogger();
+    const v = speaking(BASE, logger);
+    dirs.push(v.workDir);
+    const handle = await v.start();
+    await v.voice.whenIdle();
+
+    await handle.speak("Привіт.");
+
+    const line = lines.find((entry) => entry.msg === "voice: spoke a clip");
+    expect(line).toBeDefined();
+    expect(line?.fields?.chars).toBe(7);
+    expect(typeof line?.fields?.synthMs).toBe("number");
+    expect(typeof line?.fields?.playMs).toBe("number");
+  });
+
+  it("logs how long recognition took for a heard utterance", async () => {
+    const { logger, lines } = recordingLogger();
+    const v = speaking(BASE, logger);
+    dirs.push(v.workDir);
+    await v.start();
+    askSomething(v.voice);
+    await v.voice.whenIdle();
+
+    const line = lines.find((entry) => entry.msg === "voice: transcribed");
+    expect(line).toBeDefined();
+    expect(typeof line?.fields?.asrMs).toBe("number");
+    expect(typeof line?.fields?.speechMs).toBe("number");
+    expect(line?.fields?.chars).toBeGreaterThan(0);
+  });
+});
+
+describe("planSpeech", () => {
+  it("keeps Ukrainian with the Ukrainian voice and Latin runs with English", () => {
+    const parts = planSpeech("Готово. OpenCode is great. Далі працюємо.", 400);
+
+    expect(parts.map((part) => part.language)).toEqual(["uk", "en", "uk"]);
+    expect(parts.map((part) => part.text)).toEqual([
+      "Готово.",
+      "OpenCode is great.",
+      "Далі працюємо.",
+    ]);
+  });
+
+  it("lifts a product name out of a Ukrainian sentence", () => {
+    const parts = planSpeech("Відкрий SignalConnector і перевір.", 400);
+
+    expect(parts).toEqual([
+      { text: "Відкрий", language: "uk" },
+      { text: "SignalConnector", language: "en" },
+      { text: "і перевір.", language: "uk" },
+    ]);
+  });
+
+  it("never plans more than the character budget", () => {
+    const parts = planSpeech(`${"речення. ".repeat(40)}кінець`, 60);
+
+    expect(parts.length).toBeGreaterThan(0);
+    expect(parts.reduce((sum, part) => sum + part.text.length, 0)).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("BrowserVoice in two languages", () => {
+  it("says Ukrainian sentences with the main voice and English runs with the English one", async () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "voice-"));
+    dirs.push(workDir);
+    const english = new StubSynthesizer(workDir);
+    const v = speaking(BASE, nullLogger(), english);
+    dirs.push(v.workDir);
+    const handle = await v.start();
+    await v.voice.whenIdle();
+
+    await handle.speak("Готово. OpenCode is great. Далі працюємо.");
+
+    expect(v.synthesizer.texts).toEqual([ACK_TEXT, "Готово.", "Далі працюємо."]);
+    expect(english.texts).toEqual(["OpenCode is great."]);
+    // Three answer clips were queued in the order they are heard.
+    expect(v.sink.played).toHaveLength(3);
+  });
+
+  it("sends a name to the English voice instead of transliterating it", async () => {
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "voice-"));
+    dirs.push(workDir);
+    const english = new StubSynthesizer(workDir);
+    const v = speaking(
+      { ...BASE, pronunciations: { SignalConnector: "Сигнал Конектор" } },
+      nullLogger(),
+      english,
+    );
+    dirs.push(v.workDir);
+    const handle = await v.start();
+    await v.voice.whenIdle();
+
+    await handle.speak("Відкрий SignalConnector.");
+
+    expect(english.texts).toEqual(["SignalConnector."]);
+    expect(v.synthesizer.texts).not.toContain("Сигнал Конектор");
   });
 });

@@ -78,6 +78,7 @@ export const ConfigSchema = z.object({
     /** Azure Speech region and Ukrainian neural voice. */
     azureRegion: z.string().default("northeurope"),
     azureVoice: z.string().default("uk-UA-PolinaNeural"),
+    azureVoiceEnglish: z.string().default("en-US-JennyNeural"),
     azureRate: z.string().default("-5%"),
     /** Microsoft Edge neural voice for the "edge" synthesizer. */
     edgeVoice: z.string().default("uk-UA-OstapNeural"),
@@ -104,6 +105,15 @@ export const ConfigSchema = z.object({
     httpTranscriptionModel: z.string().default("openai/whisper-large-v3"),
     /** Language hint for that endpoint; "auto" sends none. */
     httpTranscriptionLanguage: z.string().default("uk"),
+    /**
+     * Vocabulary hint for the recogniser: names it should spell as typed, not
+     * as it hears them ("SignalConnector", "opencode"). Empty sends no prompt.
+     */
+    transcriptionPrompt: z
+      .string()
+      .default(
+        "SignalConnector, opencode, GitHub, Jitsi, TypeScript, npm, API, JSON, деплой, тікет, сесія",
+      ),
     /** sherpa-onnx's offline recogniser; with sherpaModelDir it replaces whisper. */
     sherpaPath: z.string().default(""),
     /** Directory with encoder_model.ort, decoder_model_merged.ort and tokens.txt. */
@@ -146,6 +156,13 @@ export const ConfigSchema = z.object({
       rate: z.number().int().min(-10).max(10).default(0),
       /** The longest answer read aloud; the full text stays in the group. */
       maxSpeechChars: z.number().int().positive().default(600),
+      /**
+       * A voice task that has not answered by now says it is still working;
+       * 0 says nothing. Without this the room hears silence and talks over it.
+       */
+      workingCueMs: z.number().int().nonnegative().default(8_000),
+      /** The short phrase said while a long voice task is still running. */
+      workingCue: z.string().default("Ще працюю."),
     })
     .default({
       whisperPath: "",
@@ -163,6 +180,8 @@ export const ConfigSchema = z.object({
       voiceName: "",
       rate: 0,
       maxSpeechChars: 600,
+      workingCueMs: 8_000,
+      workingCue: "Ще працюю.",
     }),
   /**
    * The meeting's own budgets (spine AD-1: core sees telemetry only). Presence

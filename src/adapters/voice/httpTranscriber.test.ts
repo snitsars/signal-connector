@@ -67,6 +67,34 @@ describe("HttpTranscriber", () => {
     expect(sent?.get("language")).toBeNull();
   });
 
+  it("sends the vocabulary prompt so names are spelled as typed", async () => {
+    let sent: FormData | undefined;
+    const voice = new HttpTranscriber({
+      ...OPTIONS,
+      prompt: "SignalConnector, opencode",
+      fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+        sent = init?.body as FormData;
+        return response({ text: "ок" });
+      }) as typeof fetch,
+    });
+    await voice.transcribe(wav());
+    expect(sent?.get("prompt")).toBe("SignalConnector, opencode");
+  });
+
+  it("sends no prompt when it is empty", async () => {
+    let sent: FormData | undefined;
+    const voice = new HttpTranscriber({
+      ...OPTIONS,
+      prompt: "  ",
+      fetchImpl: (async (_url: string | URL | Request, init?: RequestInit) => {
+        sent = init?.body as FormData;
+        return response({ text: "ок" });
+      }) as typeof fetch,
+    });
+    await voice.transcribe(wav());
+    expect(sent?.get("prompt")).toBeNull();
+  });
+
   it("reports the service's status and a short body, never the key", async () => {
     const voice = new HttpTranscriber({
       ...OPTIONS,

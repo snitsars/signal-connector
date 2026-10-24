@@ -14,6 +14,8 @@ export interface HttpTranscriberOptions {
   url: string;
   model: string;
   language?: string;
+  /** Vocabulary hint: names the recogniser should spell as the operator does. */
+  prompt?: string;
   apiKey: string;
   timeoutMs?: number;
   /** Injectable for tests. */
@@ -51,6 +53,8 @@ export class HttpTranscriber implements Transcriber {
       form.append("model", this.options.model);
       const language = this.options.language?.trim();
       if (language && language !== "auto") form.append("language", language);
+      const prompt = this.options.prompt?.trim();
+      if (prompt) form.append("prompt", prompt);
     } catch (err: unknown) {
       return { ok: false, reason: `could not read the utterance: ${String(err)}` };
     }

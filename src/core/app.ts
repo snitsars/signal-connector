@@ -184,6 +184,8 @@ export class CoreApp {
   /** Closes an admitted meeting whose telemetry stopped; cleared on stop. */
   private watchdog: NodeJS.Timeout | undefined;
   private readonly watchdogMs: number;
+  /** "Still working" cues pending for voice tasks, by task id. */
+  private readonly workingCues = new Map<string, NodeJS.Timeout>();
 
   constructor(deps: CoreDeps) {
     this.store = deps.store;
@@ -579,6 +581,9 @@ export class CoreApp {
     this.setAvatarMood(project.id, "thinking");
     this.store.setValue(`statusMsg:${task.id}`, messageId);
     this.logger.info("task started", { taskId: task.id, project: project.name });
+    // A spoken question can take a while; the room should hear that it is being
+    // worked on rather than wonder whether the avatar went deaf.
+    if (voice) this.scheduleWorkingCue(task);
     return task;
   }
 
@@ -1321,6 +1326,9 @@ export class CoreApp {
    * approvals or the next agent event.
    */
   private speakOutcome(task: Task): void {
+    // The answer (or its failure) replaces the waiting cue, whether or not it
+    // can be spoken into the current room.
+    this.clearWorkingCue(task.id);
     if (!task.voice) return;
     const active = this.activeMeeting;
     if (!active || active.finished || active.projectId !== task.projectId) return;
@@ -1336,6 +1344,46 @@ export class CoreApp {
     void handle.speak(body).catch((err: unknown) => {
       this.logger.warn("voice: could not speak the answer", { error: String(err) });
     });
+  }
+
+  /**
+   * Say one short "still working" line when a voice task has not answered within
+   * its budget. Without it the room hears silence and the operator talks over it;
+   * with it, the wait is acknowledged and the answer follows. The cue is only
+   * for the meeting that heard the question, and only while it is still running.
+   */
+  private scheduleWorkingCue(task: Task): void {
+    const delay = this.config.voice.workingCueMs;
+    const phrase = this.config.voice.workingCue.trim();
+    if (delay <= 0 || !phrase) return;
+    const timer = setTimeout(() => {
+      this.workingCues.delete(task.id);
+      const active = this.activeMeeting;
+      if (!active || active.finished || active.listenOnly) return;
+      if (this.store.getValue(`voiceMeeting:${task.id}`) !== String(active.startedAt)) return;
+      const current = this.store.getTask(task.id);
+      if (!current || current.state === "done" || current.state === "failed") return;
+      const handle = active.voice;
+      if (!handle) return;
+      this.logger.info("voice: said it is still working", { taskId: task.id });
+      void handle.speak(phrase).catch((err: unknown) => {
+        this.logger.warn("voice: could not say it is still working", { error: String(err) });
+      });
+    }, delay);
+    timer.unref();
+    this.workingCues.set(task.id, timer);
+  }
+
+  private clearWorkingCue(taskId: string): void {
+    const timer = this.workingCues.get(taskId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.workingCues.delete(taskId);
+  }
+
+  private clearWorkingCues(): void {
+    for (const timer of this.workingCues.values()) clearTimeout(timer);
+    this.workingCues.clear();
   }
 
   private async editMeetingMessage(active: ActiveMeeting, markup: string): Promise<void> {
@@ -1361,6 +1409,8 @@ export class CoreApp {
   ): Promise<void> {
     if (active.finished) return;
     active.finished = true;
+    // No cue may outlive the meeting and speak into the next one.
+    this.clearWorkingCues();
     // Terminal means deaf too: the pump is closed before the row and the group
     // are settled, so no orphan polling outlives the meeting.
     await this.stopListening(active);
@@ -1408,6 +1458,8 @@ export class CoreApp {
     }
 
     active.stopping = true;
+    // A cue queued for a task in this meeting must not play over the farewell.
+    this.clearWorkingCues();
     this.logger.info("meeting: leaving on request", { project: active.projectName });
     // Say goodbye while the page is still in the room. The wait is bounded so a
     // slow voice can never wedge /meet stop, and a failure never blocks leaving.

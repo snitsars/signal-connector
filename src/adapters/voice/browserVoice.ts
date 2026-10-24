@@ -130,6 +130,37 @@ export function matchesLanguage(text: string, language: string): boolean {
   }
   return true;
 }
+/**
+ * Split an answer into the pieces the voice should say separately: sentences,
+ * and inside a sentence the runs of Latin letters (product names, English
+ * phrases) so they can be spoken by an English voice. The total is capped.
+ */
+export interface SpeechSegment {
+  text: string;
+  language: "uk" | "en";
+}
+
+export function planSpeech(text: string, maxChars: number): SpeechSegment[] {
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (!clean || maxChars <= 0) return [];
+  const sentences = clean.match(/[^.!?…]+[.!?…]*/g) ?? [clean];
+  const out: SpeechSegment[] = [];
+  let used = 0;
+  for (const sentence of sentences) {
+    const parts =
+      sentence.match(/[A-Za-z][A-Za-z0-9'’._-]*(?:\s+[A-Za-z][A-Za-z0-9'’._-]*)*|[^A-Za-z]+/g) ??
+      [sentence];
+    for (const part of parts) {
+      const piece = part.trim();
+      if (!piece || !/[A-Za-z\u0400-\u04FF]/.test(piece)) continue;
+      if (used + piece.length + 1 > maxChars) return out;
+      out.push({ text: piece, language: /^[A-Za-z]/.test(piece) ? "en" : "uk" });
+      used += piece.length + 1;
+    }
+  }
+  return out;
+}
+
 export interface SpeechState {
   speaking: boolean;
   queued: number;
@@ -140,6 +171,10 @@ interface PreparedClip {
   base64: string;
   /** Deleted once the page has the clip; absent for the in-memory ack. */
   wavPath?: string;
+  /** Spoken characters, for the latency line. */
+  chars?: number;
+  /** Time the synthesiser took, in milliseconds. */
+  synthMs?: number;
 }
 
 /**
@@ -179,6 +214,8 @@ export interface BrowserVoiceOptions {
   ttsKey?: string;
   /** The Azure Speech key, resolved from the secret store by the daemon. */
   azureKey?: string;
+  /** Injectable for tests: the English voice used for Latin segments. */
+  englishSynthesizer?: Synthesizer;
 }
 
 /** One listening session: the accumulated audio between two cuts. */
@@ -199,6 +236,11 @@ export class BrowserVoice implements VoicePort {
   private readonly workDir: string;
   private readonly transcriber: Transcriber;
   private readonly synthesizer: Synthesizer;
+  /**
+   * The English voice for Latin segments (product names, quoted English) when
+   * the configured voice is Ukrainian; absent when one voice covers both.
+   */
+  private readonly englishSynthesizer: Synthesizer | undefined;
   private readonly sink: SpeechSink | undefined;
   private listening: Listening | undefined;
   /** Transcriptions in flight, in order, so shutdown can wait for them. */
@@ -277,6 +319,21 @@ export class BrowserVoice implements VoicePort {
               rate: options.config.rate,
               voiceName: options.config.voiceName,
             }));
+    // Ukrainian sentences stay with the Ukrainian voice; an English run inside
+    // them ("opencode", "GitHub Actions") goes to a native English voice rather
+    // than being read with a Ukrainian accent. One voice for both is fine when
+    // the chosen provider already handles mixed text, so this is Azure-only.
+    this.englishSynthesizer =
+      options.englishSynthesizer ??
+      (this.synthChoice() === "azure" && this.config.azureVoiceEnglish.trim()
+        ? new AzureSynthesizer({
+            key: options.azureKey ?? "",
+            region: this.config.azureRegion,
+            voice: this.config.azureVoiceEnglish,
+            rate: this.config.azureRate,
+            workDir: options.workDir,
+          })
+        : undefined);
     this.sink = options.sink;
     // The operator picks the recogniser; "auto" keeps the local default and
     // never sends audio anywhere. A hosted endpoint is used only when asked for,
@@ -299,6 +356,7 @@ export class BrowserVoice implements VoicePort {
             url: options.config.httpTranscriptionUrl,
             model: options.config.httpTranscriptionModel,
             language: options.config.httpTranscriptionLanguage,
+            prompt: options.config.transcriptionPrompt,
             apiKey: options.transcriptionKey ?? "",
           })
         : local
@@ -513,24 +571,49 @@ export class BrowserVoice implements VoicePort {
 
   /** Speak an answer; a cap keeps a long report out of the room's ears. */
   private speak(input: StartListeningInput, text: string): Promise<void> {
-    const prepared = applyPronunciations(speakable(text), this.config.pronunciations);
+    // With an English voice in play the spelling map is skipped: names travel
+    // to the voice that already knows them, so "SignalConnector" is not forced
+    // into a Cyrillic transliteration first.
+    const prepared = this.englishSynthesizer
+      ? speakable(text)
+      : applyPronunciations(speakable(text), this.config.pronunciations);
     const capped = capSpeech(prepared, this.config.maxSpeechChars);
     if (!capped) return Promise.resolve();
-    return this.enqueueSpeech(input, async () => {
-      const result = await this.synthesizer.synthesize(capped);
-      if (!result.ok) {
-        this.reportSpeechFailure(input, result.reason);
-        return undefined;
-      }
-      const base64 = this.readClip(result.wavPath);
-      if (!base64) {
-        this.discardClip(result.wavPath);
-        this.reportSpeechFailure(input, "the voice wrote no audio");
-        return undefined;
-      }
-      // The WAV lives until the page has the clip; enqueueSpeech deletes it.
-      return { base64, wavPath: result.wavPath };
-    });
+    const segments = this.englishSynthesizer?.configured
+      ? planSpeech(capped, this.config.maxSpeechChars)
+      : [{ text: capped, language: "uk" as const }];
+    if (segments.length === 0) return Promise.resolve();
+    let last: Promise<void> = Promise.resolve();
+    // Each segment is queued on its own: the first sentence reaches the room
+    // while the rest are still being synthesised, in order.
+    for (const segment of segments) {
+      const voice =
+        segment.language === "en" && this.englishSynthesizer?.configured
+          ? this.englishSynthesizer
+          : this.synthesizer;
+      last = this.enqueueSpeech(input, async () => {
+        const startedAt = Date.now();
+        const result = await voice.synthesize(segment.text);
+        if (!result.ok) {
+          this.reportSpeechFailure(input, result.reason);
+          return undefined;
+        }
+        const base64 = this.readClip(result.wavPath);
+        if (!base64) {
+          this.discardClip(result.wavPath);
+          this.reportSpeechFailure(input, "the voice wrote no audio");
+          return undefined;
+        }
+        // The WAV lives until the page has the clip; enqueueSpeech deletes it.
+        return {
+          base64,
+          wavPath: result.wavPath,
+          chars: segment.text.length,
+          synthMs: Date.now() - startedAt,
+        };
+      });
+    }
+    return last;
   }
 
   /**
@@ -559,10 +642,16 @@ export class BrowserVoice implements VoicePort {
         if (!clip) return;
         if (generation !== this.speechGeneration) return;
         if (this.sink?.epoch && this.sink.epoch() !== epoch) return;
+        const playStartedAt = Date.now();
         await this.playClip(input, clip.base64, epoch);
-        // Evidence for "I saw the answer but heard nothing": the clip reached
-        // the page, without printing any of the text.
-        this.logger.info("voice: spoke a clip");
+        // One line per clip: what was said (in characters), how long the voice
+        // took to make it and how long the room took to accept it. This is the
+        // only way to tell a slow model from a slow page.
+        this.logger.info("voice: spoke a clip", {
+          ...(clip.chars !== undefined ? { chars: clip.chars } : {}),
+          ...(clip.synthMs !== undefined ? { synthMs: clip.synthMs } : {}),
+          playMs: Date.now() - playStartedAt,
+        });
       } finally {
         // No audio outlives the page having the clip.
         if (clip?.wavPath) this.discardClip(clip.wavPath);
@@ -717,6 +806,8 @@ export class BrowserVoice implements VoicePort {
 
     const wavPath = path.join(this.workDir, `utterance-${crypto.randomUUID()}.wav`);
     let result: TranscribeResult;
+    const speechMs = Math.round((samples.length * 1000) / SAMPLE_RATE);
+    const transcribedAt = Date.now();
     try {
       fs.mkdirSync(this.workDir, { recursive: true });
       fs.writeFileSync(wavPath, pcmToWav(normalizeSamples(samples), SAMPLE_RATE));
@@ -751,6 +842,11 @@ export class BrowserVoice implements VoicePort {
       this.countDrop("the transcript is not in the meeting language");
       return;
     }
+    this.logger.info("voice: transcribed", {
+      asrMs: Date.now() - transcribedAt,
+      speechMs,
+      chars: result.text.length,
+    });
     input.onUtterance({
       text: result.text,
       durationMs: Math.round((samples.length * 1000) / SAMPLE_RATE),

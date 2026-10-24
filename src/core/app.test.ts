@@ -23,7 +23,7 @@ function makeApp(
   probeRoom?: (link: URL) => Promise<boolean>,
   logger?: Logger,
   voice?: VoicePort,
-  options: { now?: () => number; watchdogMs?: number } = {},
+  options: { now?: () => number; watchdogMs?: number; config?: Record<string, unknown> } = {},
 ) {
   const store: Store = openStore(":memory:");
   storeRef = store;
@@ -34,6 +34,7 @@ function makeApp(
     signal: { account: "+1000" },
     projects,
     outbound,
+    ...(options.config ?? {}),
   });
   const app = new CoreApp({
     store,
@@ -2227,13 +2228,16 @@ describe("meeting telemetry, presence and the watchdog", () => {
   const said = (): string[] => voice.spoken.filter((text) => !text.startsWith("Привіт") && !text.startsWith("До зустрічі"));
 
   /** An admitted meeting on a clock the test moves by hand. */
-  async function admitted(options: { watchdogMs?: number } = {}): Promise<void> {
+  async function admitted(options: { watchdogMs?: number; workingCueMs?: number } = {}): Promise<void> {
     clock = 1_000_000;
     meeting = new FakeMeeting();
     voice = new FakeVoice();
     ctx = makeApp(PROJECTS, {}, undefined, meeting, reachable, undefined, voice, {
       now: () => clock,
       ...(options.watchdogMs !== undefined ? { watchdogMs: options.watchdogMs } : {}),
+      ...(options.workingCueMs !== undefined
+        ? { config: { voice: { workingCueMs: options.workingCueMs } } }
+        : {}),
     });
     await ctx.app.start();
     ctx.signal.emitMessage(incoming("/open demo"));
@@ -2303,6 +2307,43 @@ describe("meeting telemetry, presence and the watchdog", () => {
 
     expect(ctx.store.getOpenMeeting()).toBeUndefined();
     expect(ctx.store.getValue("health:meeting")).toBe("");
+    await ctx.app.stop();
+  });
+
+  it("says it is still working when a voice task outlasts its cue", async () => {
+    await admitted({ workingCueMs: 30 });
+    voice.utterance("довга робота");
+    await tick();
+    await tick();
+    expect(said()).not.toContain("Ще працюю.");
+
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    await tick();
+
+    expect(said()).toContain("Ще працюю.");
+    // The answer still replaces the cue and is the last thing spoken.
+    const taskId = ctx.agent.started.at(-1)!.taskId;
+    ctx.agent.emit({ type: "idle", taskId, at: Date.now(), summary: "готово" });
+    await tick();
+    await tick();
+    expect(said().at(-1)).toBe("готово");
+    await ctx.app.stop();
+  });
+
+  it("does not say it is still working once the answer is ready", async () => {
+    await admitted({ workingCueMs: 60 });
+    voice.utterance("швидка робота");
+    await tick();
+    await tick();
+    const taskId = ctx.agent.started.at(-1)!.taskId;
+    ctx.agent.emit({ type: "idle", taskId, at: Date.now(), summary: "готово" });
+    await tick();
+    await tick();
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await tick();
+
+    expect(said()).toEqual(["готово"]);
     await ctx.app.stop();
   });
 
