@@ -429,6 +429,11 @@ export class BrowserVoice implements VoicePort {
             reason: "the configured recogniser is missing its endpoint, model or key",
           };
     }
+    // "auto" picks sherpa when its paths are set, so it is available without
+    // the whisper files the default path would look for.
+    if (choice === "auto" && this.config.sherpaPath.trim() && this.config.sherpaModelDir.trim()) {
+      return { available: true };
+    }
     if (!this.config.whisperPath.trim()) {
       return { available: false, reason: "no transcription tool is configured (voice.whisperPath)" };
     }

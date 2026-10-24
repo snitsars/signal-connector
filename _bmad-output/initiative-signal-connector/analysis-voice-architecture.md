@@ -215,13 +215,19 @@ Shipped from this plan, with tests, without changing the meeting transport:
 - **Recognition vocabulary.** `transcriptionPrompt` sends a name list to the
   OpenAI-compatible recogniser, so "SignalConnector"/"opencode" are spelled as
   typed instead of as heard.
+- **Step 2, first cut.** `streamingTranscription = "openai"` opens the Realtime
+  transcription socket for the meeting, uploads the 16 kHz room frames while the
+  operator speaks (upsampled to the API's 24 kHz floor) and commits at
+  end-of-turn. On a 9.3 s clip the final arrived in 619 ms after commit against
+  1.9 s for the batch call, and any socket failure falls back to the batch
+  recogniser. End-of-turn is still the energy gate; partials are not yet shown.
 
 Still open, in the order of value:
 
-1. **Streaming ASR with end-of-turn and partials** — replace the per-utterance
-   WAV POST with a WebSocket (Deepgram Flux / ElevenLabs Scribe v2 Realtime),
-   keeping the batch call as fallback. This is the largest remaining latency
-   term (about 1.5 s) and the fix for fragments.
+1. **Semantic end-of-turn and partials** — the streaming socket now removes the
+   ASR round trip, but the turn still closes on 1.1 s of energy silence and the
+   room sees no partial text. A small turn detector (Silero or the socket's own
+   VAD) would stop fragments from becoming tasks.
 2. **True token streaming into TTS** — the agent's answer arrives as one
    summary today, so the first sentence waits for the whole answer. Streaming
    the agent's text events into the sentence planner removes that wait.

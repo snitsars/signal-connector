@@ -260,6 +260,9 @@ set `transcriber = "http"` (any OpenAI-compatible `/v1/audio/transcriptions`, fo
 OpenAI's `gpt-4o-transcribe`) or `transcriber = "nvidia"` (NVIDIA Riva), and store the key
 as the `transcription-api-key` secret. `transcriptionPrompt` lists names the recogniser
 should spell as typed, which is the cheapest accuracy win for product names.
+`streamingTranscription = "openai"` additionally uploads the room frames live over the
+Realtime socket, so only the tail is left when the utterance is cut; the batch call
+remains the fallback if that socket is unavailable.
 
 ```powershell
 pwsh scripts/install-whisper.ps1 -Model small   # whisper.cpp + small model + Silero VAD

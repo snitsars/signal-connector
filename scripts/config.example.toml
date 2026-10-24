@@ -52,6 +52,11 @@ transcriber = "auto"
 # httpTranscriptionLanguage = "uk"
 # Names the recogniser should spell as typed, not as it hears them; "" sends none.
 # transcriptionPrompt = "SignalConnector, opencode, GitHub, Jitsi, TypeScript, npm"
+# Live recognition over the same key's Realtime socket: frames are uploaded while
+# you speak, so the final arrives in a few hundred milliseconds. The batch
+# recogniser above stays as the fallback. "off" keeps the WAV path only.
+# streamingTranscription = "openai"
+# streamingTranscriptionModel = "gpt-live-transcribe"
 # sherpa-onnx + Ukrainian Moonshine (scripts/install-sherpa.ps1). When both are
 # set it replaces whisper: several times faster on short utterances.
 # sherpaPath = 'C:\Users\you\AppData\Local\SignalConnector\sherpa\...\bin\sherpa-onnx-offline.exe'

@@ -954,4 +954,11 @@ describe("BrowserVoice with streaming recognition", () => {
 
     expect(await v.voice.available()).toEqual({ available: true });
   });
+
+  it("is available from sherpa under auto when its own paths are set", async () => {
+    const v = speaking({ ...BASE, sherpaPath: "sherpa.exe", sherpaModelDir: "model" });
+    dirs.push(v.workDir);
+
+    expect(await v.voice.available()).toEqual({ available: true });
+  });
 });
