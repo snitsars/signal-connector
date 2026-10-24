@@ -16,6 +16,7 @@ import {
   type SpeechState,
 } from "./browserVoice.js";
 import { int16ToBase64, type RoomAudioFrame } from "./pcm.js";
+import type { StreamingTranscription } from "./realtimeTranscriber.js";
 import type { SynthesizeResult, Synthesizer } from "./sapi.js";
 import type { TranscribeResult, Transcriber } from "./whisper.js";
 
@@ -161,7 +162,12 @@ function makeVoice(config = BASE) {
 }
 
 /** A voice with a fake synthesiser and a fake player, sharing one temp dir. */
-function speaking(config = BASE, logger = nullLogger(), englishSynthesizer?: StubSynthesizer) {
+function speaking(
+  config = BASE,
+  logger = nullLogger(),
+  englishSynthesizer?: StubSynthesizer,
+  streamingTranscriber?: StreamingTranscription,
+) {
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "voice-"));
   const transcriber = new StubTranscriber();
   const synthesizer = new StubSynthesizer(workDir);
@@ -173,6 +179,7 @@ function speaking(config = BASE, logger = nullLogger(), englishSynthesizer?: Stu
     transcriber,
     synthesizer,
     ...(englishSynthesizer ? { englishSynthesizer } : {}),
+    ...(streamingTranscriber ? { streamingTranscriber } : {}),
     sink,
   });
   const utterances: Utterance[] = [];
@@ -845,5 +852,106 @@ describe("BrowserVoice in two languages", () => {
 
     expect(english.texts).toEqual(["SignalConnector."]);
     expect(v.synthesizer.texts).not.toContain("Сигнал Конектор");
+  });
+});
+
+/** A streaming recogniser whose socket never exists: tests drive the result. */
+class StubStreaming implements StreamingTranscription {
+  configured = true;
+  ready = true;
+  readonly appended: string[] = [];
+  started = 0;
+  finished = 0;
+  resets = 0;
+  stopped = 0;
+  result: TranscribeResult = { ok: true, text: "streamed question" };
+
+  async start(): Promise<boolean> {
+    this.started += 1;
+    return true;
+  }
+
+  append(pcm: string): void {
+    this.appended.push(pcm);
+  }
+
+  async finish(): Promise<TranscribeResult> {
+    this.finished += 1;
+    return this.result;
+  }
+
+  reset(): void {
+    this.resets += 1;
+  }
+
+  stop(): void {
+    this.stopped += 1;
+  }
+}
+
+describe("BrowserVoice with streaming recognition", () => {
+  it("uses the live transcript and skips the batch WAV call", async () => {
+    const streaming = new StubStreaming();
+    const v = speaking(BASE, nullLogger(), undefined, streaming);
+    dirs.push(v.workDir);
+    await v.start();
+
+    for (let i = 0; i < 3; i++) v.voice.push(speechFrame());
+    for (let i = 0; i < 9; i++) v.voice.push(silenceFrame());
+    await v.voice.whenIdle();
+
+    expect(v.utterances.map((utterance) => utterance.text)).toEqual(["streamed question"]);
+    expect(v.transcriber.calls).toHaveLength(0);
+    expect(streaming.finished).toBe(1);
+    expect(streaming.appended.length).toBeGreaterThan(0);
+  });
+
+  it("falls back to the batch recogniser when the live one fails", async () => {
+    const streaming = new StubStreaming();
+    streaming.result = { ok: false, reason: "the socket closed" };
+    const v = speaking(BASE, nullLogger(), undefined, streaming);
+    dirs.push(v.workDir);
+    await v.start();
+
+    for (let i = 0; i < 3; i++) v.voice.push(speechFrame());
+    for (let i = 0; i < 9; i++) v.voice.push(silenceFrame());
+    await v.voice.whenIdle();
+
+    expect(v.transcriber.calls).toHaveLength(1);
+    expect(v.utterances.map((utterance) => utterance.text)).toEqual(["fix the parser"]);
+  });
+
+  it("drops the buffered frames of a window too short to be a question", async () => {
+    const streaming = new StubStreaming();
+    const v = speaking(BASE, nullLogger(), undefined, streaming);
+    dirs.push(v.workDir);
+    await v.start();
+
+    v.voice.push(speechFrame());
+    v.voice.push(speechFrame());
+    for (let i = 0; i < 9; i++) v.voice.push(silenceFrame());
+    await v.voice.whenIdle();
+
+    expect(streaming.resets).toBeGreaterThanOrEqual(1);
+    expect(v.utterances).toHaveLength(0);
+    expect(v.transcriber.calls).toHaveLength(0);
+  });
+
+  it("closes the live session with the meeting", async () => {
+    const streaming = new StubStreaming();
+    const v = speaking(BASE, nullLogger(), undefined, streaming);
+    dirs.push(v.workDir);
+    const handle = await v.start();
+
+    await handle.stop();
+
+    expect(streaming.stopped).toBeGreaterThanOrEqual(1);
+  });
+
+  it("is available from a hosted recogniser without local whisper files", async () => {
+    const v = speaking({ ...BASE, transcriber: "http" });
+    dirs.push(v.workDir);
+
+    expect(await v.voice.available()).toEqual({ available: true });
   });
 });

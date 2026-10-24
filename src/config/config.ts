@@ -93,6 +93,13 @@ export const ConfigSchema = z.object({
     ttsInstructions: z.string().default(""),
     /** Which recogniser to use: auto (sherpa, else whisper), or a forced one. */
     transcriber: z.enum(["auto", "whisper", "sherpa", "http", "nvidia"]).default("auto"),
+    /**
+     * Live recognition over a WebSocket, with the batch recogniser as fallback:
+     * "off" (the WAV path only) or "openai" (the same key, its Realtime socket).
+     */
+    streamingTranscription: z.enum(["off", "openai"]).default("off"),
+    /** The live model; gpt-live-transcribe is the one built for streamed audio. */
+    streamingTranscriptionModel: z.string().default("gpt-live-transcribe"),
     /** NVIDIA Riva gRPC host and the hosted whisper-large-v3 function. */
     rivaHost: z.string().default("grpc.nvcf.nvidia.com:443"),
     rivaFunctionId: z.string().default("b702f636-f60c-4a3d-a6f4-f3568c13bd7d"),

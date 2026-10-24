@@ -42,6 +42,10 @@ import { HttpSynthesizer } from "./httpSynthesizer.js";
 import { EdgeSynthesizer } from "./edge.js";
 import { AzureSynthesizer } from "./azure.js";
 import { RivaTranscriber } from "./riva.js";
+import {
+  OpenAiStreamingTranscriber,
+  type StreamingTranscription,
+} from "./realtimeTranscriber.js";
 import { normalizeSamples, pcmToWav } from "./wav.js";
 import {
   WhisperTranscriber,
@@ -216,6 +220,8 @@ export interface BrowserVoiceOptions {
   azureKey?: string;
   /** Injectable for tests: the English voice used for Latin segments. */
   englishSynthesizer?: Synthesizer;
+  /** Injectable for tests: the streaming recogniser used instead of the WAV. */
+  streamingTranscriber?: StreamingTranscription;
 }
 
 /** One listening session: the accumulated audio between two cuts. */
@@ -235,6 +241,12 @@ export class BrowserVoice implements VoicePort {
   private readonly logger: Logger;
   private readonly workDir: string;
   private readonly transcriber: Transcriber;
+  /**
+   * Optional streaming recognition over the same key: frames are uploaded while
+   * the operator speaks, so the final arrives far sooner than a WAV round trip.
+   * A failure always falls back to `transcriber`.
+   */
+  private readonly streamingTranscriber: StreamingTranscription | undefined;
   private readonly synthesizer: Synthesizer;
   /**
    * The English voice for Latin segments (product names, quoted English) when
@@ -371,6 +383,19 @@ export class BrowserVoice implements VoicePort {
               ...(options.config.language ? { language: options.config.language } : {}),
               logger: options.logger,
             }));
+    // Streaming is an optimisation over the batch recogniser above; without a
+    // key or without the feature enabled, the WAV path stays in charge.
+    this.streamingTranscriber =
+      options.streamingTranscriber ??
+      (this.config.streamingTranscription === "openai" &&
+      (options.transcriptionKey ?? "").trim().length > 0
+        ? new OpenAiStreamingTranscriber({
+            apiKey: options.transcriptionKey ?? "",
+            model: this.config.streamingTranscriptionModel,
+            language: this.config.httpTranscriptionLanguage,
+            prompt: this.config.transcriptionPrompt,
+          })
+        : undefined);
   }
 
   /** Pick the configured voice; "auto" keeps the best local one. */
@@ -392,6 +417,18 @@ export class BrowserVoice implements VoicePort {
   }
 
   async available(): Promise<VoiceAvailability> {
+    // A streaming recogniser is enough on its own; it shares the hosted key and
+    // sends the same audio the batch path would.
+    if (this.streamingTranscriber?.configured) return { available: true };
+    const choice = this.config.transcriber;
+    if (choice === "http" || choice === "nvidia" || choice === "sherpa") {
+      return this.transcriber.configured
+        ? { available: true }
+        : {
+            available: false,
+            reason: "the configured recogniser is missing its endpoint, model or key",
+          };
+    }
     if (!this.config.whisperPath.trim()) {
       return { available: false, reason: "no transcription tool is configured (voice.whisperPath)" };
     }
@@ -427,6 +464,24 @@ export class BrowserVoice implements VoicePort {
     // The acknowledgement is made now, before it is needed: a cold PowerShell
     // start does not fit in the two-second budget after an utterance is cut.
     this.ackReady = this.prepareAck(input).catch(() => undefined);
+    // Open the streaming session now: the first frames of the first question
+    // should be uploaded too. A failure is not fatal — the WAV path answers.
+    const streaming = this.streamingTranscriber;
+    if (streaming?.configured) {
+      streaming.stop();
+      void streaming
+        .start()
+        .then((ok) => {
+          if (!ok) {
+            this.logger.info(
+              "voice: streaming recognition unavailable; using the batch recogniser",
+            );
+          }
+        })
+        .catch((err: unknown) => {
+          this.logger.warn("voice: streaming recognition failed", { error: String(err) });
+        });
+    }
     return {
       stop: async (): Promise<void> => {
         if (this.listening?.input === input) this.listening = undefined;
@@ -444,6 +499,7 @@ export class BrowserVoice implements VoicePort {
 
   async stop(): Promise<void> {
     this.listening = undefined;
+    this.streamingTranscriber?.stop();
     await this.stopSpeech();
     await this.ackReady?.catch(() => undefined);
     await this.pending.catch(() => undefined);
@@ -486,6 +542,8 @@ export class BrowserVoice implements VoicePort {
 
     listening.chunks.push(samples);
     listening.samples += samples.length;
+    // Upload the same frames the WAV would carry, while they are still live.
+    if (listening.speaking) this.streamingTranscriber?.append(frame.pcm);
 
     const silenceReached =
       (listening.silence * 1000) / SAMPLE_RATE >= this.config.silenceMs;
@@ -519,6 +577,9 @@ export class BrowserVoice implements VoicePort {
     const speechMs = (speechSamples * 1000) / SAMPLE_RATE;
     if (speechMs < this.config.minUtteranceMs) {
       this.logger.debug("voice: ignored a too-short window", { speechMs });
+      // Its frames are already in the streaming buffer; drop them so they do
+      // not join the next question.
+      this.streamingTranscriber?.reset();
       return;
     }
     // The acknowledgement goes out before the slow local transcription, so the
@@ -794,7 +855,7 @@ export class BrowserVoice implements VoicePort {
   }
 
   private async transcribe(input: StartListeningInput, samples: Int16Array): Promise<void> {
-    if (!this.transcriber.configured) {
+    if (!this.transcriber.configured && !this.streamingTranscriber?.configured) {
       const reason = this.missingReason();
       this.countDrop(reason);
       if (!this.missingReported) {
@@ -806,12 +867,29 @@ export class BrowserVoice implements VoicePort {
 
     const wavPath = path.join(this.workDir, `utterance-${crypto.randomUUID()}.wav`);
     let result: TranscribeResult;
+    let via: "stream" | "batch" = "batch";
     const speechMs = Math.round((samples.length * 1000) / SAMPLE_RATE);
     const transcribedAt = Date.now();
     try {
       fs.mkdirSync(this.workDir, { recursive: true });
       fs.writeFileSync(wavPath, pcmToWav(normalizeSamples(samples), SAMPLE_RATE));
-      result = await this.transcriber.transcribe(wavPath);
+      // The frames were uploaded while the operator spoke, so commit is the
+      // only round trip left. Any failure, including a socket that never
+      // opened, falls through to the WAV that was just written.
+      const streamed = this.streamingTranscriber?.configured
+        ? await this.streamingTranscriber.finish()
+        : undefined;
+      if (streamed?.ok) {
+        result = streamed;
+        via = "stream";
+      } else {
+        if (streamed) {
+          this.logger.debug("voice: streaming transcript unavailable", {
+            reason: streamed.reason,
+          });
+        }
+        result = await this.transcriber.transcribe(wavPath);
+      }
     } catch (err: unknown) {
       result = { ok: false as const, reason: `transcription failed: ${String(err)}` };
     } finally {
@@ -846,6 +924,7 @@ export class BrowserVoice implements VoicePort {
       asrMs: Date.now() - transcribedAt,
       speechMs,
       chars: result.text.length,
+      via,
     });
     input.onUtterance({
       text: result.text,
@@ -854,6 +933,13 @@ export class BrowserVoice implements VoicePort {
   }
 
   private missingReason(): string {
+    if (
+      this.config.transcriber === "http" ||
+      this.config.transcriber === "nvidia" ||
+      this.config.transcriber === "sherpa"
+    ) {
+      return "the configured recogniser is missing its endpoint, model or key";
+    }
     return this.config.whisperPath.trim()
       ? "no transcription model is configured (voice.modelPath)"
       : "no transcription tool is configured (voice.whisperPath)";
