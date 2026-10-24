@@ -243,8 +243,9 @@ link.
 ### Hearing the room
 
 A meeting is also a microphone for the project's session. Once the avatar is admitted,
-speech is copied inside the page, gated by energy, transcribed **locally** and posted in the
-project's group as `heard: <text>` before it is sent to the same session a typed task uses.
+speech is copied inside the page, gated by energy and transcribed — **locally** by default,
+or by the hosted recogniser you configure — and posted in the project's group as
+`heard: <text>` before it is sent to the same session a typed task uses.
 
 Nothing heard is ever a command, an approval or a stop: a spoken "approve" decides no
 permission — while one waits it is refused aloud and explained in the group, and otherwise it
@@ -253,7 +254,12 @@ instead of being transcribed, so a small model cannot invent an instruction out 
 missing or failing transcriber is posted in the group with its reason, and the meeting keeps
 running.
 
-The tool and models are fetched, never installed from npm and never hosted:
+The tool and models are fetched, never installed from npm and never hosted by this
+project; a hosted recogniser is opt-in with your own key. If you prefer a hosted model,
+set `transcriber = "http"` (any OpenAI-compatible `/v1/audio/transcriptions`, for example
+OpenAI's `gpt-4o-transcribe`) or `transcriber = "nvidia"` (NVIDIA Riva), and store the key
+as the `transcription-api-key` secret. `transcriptionPrompt` lists names the recogniser
+should spell as typed, which is the cheapest accuracy win for product names.
 
 ```powershell
 pwsh scripts/install-whisper.ps1 -Model small   # whisper.cpp + small model + Silero VAD
@@ -287,9 +293,12 @@ the face — it is simply deaf, and says so when someone speaks.
 ### Talking back
 
 The avatar also answers out loud, through the same synthetic microphone the room already
-receives — no new stream, socket or protocol. Speech is made **locally**: Piper, a neural
-voice fetched the way whisper.cpp is, speaks when it is configured; otherwise the Windows system
-voice (SAPI) is the fallback. Nothing is hosted and no API key is involved.
+receives — no new stream, socket or protocol. By default speech is made **locally**: Piper,
+a neural voice fetched the way whisper.cpp is, speaks when it is configured; otherwise the
+Windows system voice (SAPI) is the fallback. Nothing is hosted and no API key is involved.
+A hosted voice is opt-in: `synthesizer = "azure"` uses Azure Speech (native `uk-UA` voices
+such as `OstapNeural`, key stored as `azure-speech-key`), `"http"` uses any OpenAI-compatible
+`/v1/audio/speech`, and `"edge"` uses the Microsoft Edge voices.
 
 ```powershell
 pwsh scripts/install-piper.ps1 -Voice oleksa   # male, high; or mykyta, tetiana, ukrainian_tts
@@ -311,6 +320,16 @@ task's summary is spoken when the task finishes. The acknowledgement is rate-lim
 `ackCooldownMs`, so a burst of fragments cannot turn the room into a chorus of acknowledgements. A task
 started by **typing** in the group is never spoken.
 
+An answer is spoken in pieces: sentence by sentence, so the room hears the first sentence while
+the rest is still being made. With an English Azure voice (`azureVoiceEnglish`), a Latin run
+inside a Ukrainian sentence — a product name, a quoted English phrase — goes to that voice,
+while the Ukrainian around it stays with `azureVoice`; with a single voice,
+`voice.pronunciations` maps names to the spelling that voice reads correctly.
+
+A voice task that has not answered within `workingCueMs` says one short line
+(`workingCue`, default "Ще працюю.") instead of leaving the room in silence; the answer
+replaces it. Speech is copied to the group first, so the text is always authoritative.
+
 While a meeting is live, a permission waiting for an answer is announced aloud too; the decision
 is still typed in Signal (**approve**, **deny** or **always**), never spoken.
 
@@ -325,6 +344,15 @@ the full text always stays in the group message.
 voiceName = ""           # a Windows system voice; "" picks the default
 rate = 0                 # speaking rate, -10..10
 maxSpeechChars = 600     # longest answer read aloud; the group keeps all of it
+workingCueMs = 8000      # say workingCue if no answer by now; 0 stays silent
+workingCue = "Ще працюю."
+freshSession = true      # own session per meeting; false keeps the pinned context
+# Azure hosted voice (needs the azure-speech-key secret):
+# synthesizer = "azure"
+# azureRegion = "northeurope"
+# azureVoice = "uk-UA-OstapNeural"
+# azureVoiceEnglish = "en-US-JennyNeural"
+# azureRate = "-5%"
 ```
 
 Each spoken clip is one temp WAV in the data dir, deleted as soon as the page has it.

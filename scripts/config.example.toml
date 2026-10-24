@@ -21,13 +21,13 @@ kind = "opencode-server"     # "opencode-server" or "opencode-cli"
 serverUrl = "http://127.0.0.1:4096"
 opencodePath = "opencode"
 
-# Hearing the room and talking back in a meeting (optional). The paths below are
-# printed by scripts/install-whisper.ps1, which fetches whisper.cpp, a multilingual
-# model and the Silero VAD model into %LOCALAPPDATA%\SignalConnector\whisper. Until
-# whisperPath and modelPath are set, a meeting still runs but nothing spoken is
-# transcribed. Audio is never kept: one temp WAV per utterance and per spoken clip,
-# deleted right after the local run. Speaking uses the Windows system voice — no
-# download, no hosted API.
+# Hearing the room and talking back in a meeting (optional). Local whisper or
+# sherpa transcribes on this machine; "http"/"nvidia" and "azure"/"http"/"edge"
+# voices send audio or text to a hosted service when you choose one. The paths
+# below are printed by scripts/install-whisper.ps1, which fetches whisper.cpp, a
+# multilingual model and the Silero VAD model into %LOCALAPPDATA%\SignalConnector.
+# Audio is never kept: one temp WAV per utterance and per spoken clip, deleted
+# right after the run.
 [voice]
 # whisperPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\whisper-cli.exe'
 # modelPath = 'C:\Users\you\AppData\Local\SignalConnector\whisper\models\ggml-small.bin'
@@ -50,6 +50,8 @@ transcriber = "auto"
 # httpTranscriptionUrl = 'http://127.0.0.1:8000/v1/audio/transcriptions'
 # httpTranscriptionModel = "openai/whisper-large-v3"
 # httpTranscriptionLanguage = "uk"
+# Names the recogniser should spell as typed, not as it hears them; "" sends none.
+# transcriptionPrompt = "SignalConnector, opencode, GitHub, Jitsi, TypeScript, npm"
 # sherpa-onnx + Ukrainian Moonshine (scripts/install-sherpa.ps1). When both are
 # set it replaces whisper: several times faster on short utterances.
 # sherpaPath = 'C:\Users\you\AppData\Local\SignalConnector\sherpa\...\bin\sherpa-onnx-offline.exe'
@@ -67,15 +69,33 @@ bargeInMs = 400                # sustained speech before the answer is stopped
 voiceName = ""                 # Windows system voice; "" picks the default
 rate = 0                       # speaking rate, -10..10 (0 is the voice's pace)
 maxSpeechChars = 600           # longest answer spoken aloud; the group keeps it all
-# Which voice: auto (Piper if fetched, else the Windows voice), piper, sapi or
-# http. "http" calls an OpenAI-compatible /v1/audio/speech endpoint and needs
-# the tts-api-key secret (or TTS_API_KEY in the environment); the answer text
-# then leaves the machine.
+# A voice task with no answer by now says "workingCue"; 0 stays silent.
+workingCueMs = 8000
+workingCue = "Ще працюю."
+# Spoken questions run in their own session, so a long task cannot block the
+# room. false uses the project's pinned session and its context.
+freshSession = true
+# Which voice: auto (Piper if fetched, else the Windows voice), piper, sapi,
+# edge, azure or http. "http" calls an OpenAI-compatible /v1/audio/speech
+# endpoint and needs the tts-api-key secret (or TTS_API_KEY in the environment);
+# the answer text then leaves the machine.
 synthesizer = "auto"
 # ttsUrl = 'https://api.openai.com/v1/audio/speech'
 # ttsModel = "gpt-4o-mini-tts"
 # ttsVoice = "alloy"
 # ttsFormat = "wav"             # "wav" or "mp3"
+# Azure Speech: native uk-UA voices with their own stress. Needs the
+# azure-speech-key secret (or AZURE_SPEECH_KEY in the environment).
+# synthesizer = "azure"
+# azureRegion = "northeurope"
+# azureVoice = "uk-UA-OstapNeural"
+# azureVoiceEnglish = "en-US-JennyNeural"  # English words inside a sentence
+# azureRate = "-5%"
+# Say these words the way a Ukrainian speaker would (used when one voice reads
+# both languages). With an English Azure voice, names go to that voice instead.
+# [voice.pronunciations]
+# SignalConnector = "Сигнал Конектор"
+# opencode = "опенкод"
 
 # The meeting's own budgets (optional). Presence is advisory and never a gate.
 # The deaf alarm posts once per silence spell; the watchdog closes an admitted

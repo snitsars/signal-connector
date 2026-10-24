@@ -194,3 +194,40 @@ budget is exceeded.
   https://www.recall.ai/
 - Attendee / Vexa self-hosted bots: Forasoft's 2026 meeting-bot API comparison.
 - Google Meet Media API status (closed preview) and Zoom RTMS: same comparison.
+
+## 11. Implementation status (updated 2026-10-24)
+
+Shipped from this plan, with tests, without changing the meeting transport:
+
+- **Step 0, metrics.** Every recognised utterance logs `voice: transcribed` with
+  `asrMs`, `speechMs` and `chars`; every clip logs `voice: spoke a clip` with
+  `chars`, `synthMs` and `playMs`. A turn's cost can now be attributed instead of
+  guessed.
+- **Step 3, partial.** An answer is planned into sentences, and inside a
+  sentence into Ukrainian and Latin runs (`planSpeech`). With Azure, Ukrainian
+  runs go to `azureVoice` and English runs to `azureVoiceEnglish`
+  (`en-US-JennyNeural` by default), so a product name is read by an English
+  voice rather than transliterated; the first sentence is spoken while the rest
+  is still being made. With one voice, `voice.pronunciations` still applies.
+- **Step 4, partial.** A voice task with no answer within `workingCueMs`
+  (default 8 s) says `workingCue` ("Ще працюю.") once; the answer, a failure or
+  the end of the meeting clears it.
+- **Recognition vocabulary.** `transcriptionPrompt` sends a name list to the
+  OpenAI-compatible recogniser, so "SignalConnector"/"opencode" are spelled as
+  typed instead of as heard.
+
+Still open, in the order of value:
+
+1. **Streaming ASR with end-of-turn and partials** — replace the per-utterance
+   WAV POST with a WebSocket (Deepgram Flux / ElevenLabs Scribe v2 Realtime),
+   keeping the batch call as fallback. This is the largest remaining latency
+   term (about 1.5 s) and the fix for fragments.
+2. **True token streaming into TTS** — the agent's answer arrives as one
+   summary today, so the first sentence waits for the whole answer. Streaming
+   the agent's text events into the sentence planner removes that wait.
+3. **Barge-in with echo cancellation** — re-enable it only with a proper VAD and
+   AEC, not an energy threshold; today it is off in the live config because it
+   cut answers.
+4. **Adaptive noise floor** — a quiet microphone can sit below `rmsFloor`; an
+   EMA-based floor would hear it without raising false turns in a noisy room.
+
