@@ -35,7 +35,10 @@ export function escapeSsml(text: string): string {
 
 /** The one SSML shape this adapter sends. */
 export function azureSsml(text: string, voice: string, rate = "-5%"): string {
-  return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="uk-UA"><voice name="${voice}"><prosody rate="${rate}">${escapeSsml(text)}</prosody></voice></speak>`;
+  // Use the voice's own locale: an English run inside a Ukrainian answer must
+  // be read as English, not by a Ukrainian voice reading Latin letters.
+  const lang = /^[a-z]{2,3}-[A-Z]{2}/.exec(voice)?.[0] ?? "uk-UA";
+  return `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="${lang}"><voice name="${voice}"><prosody rate="${rate}">${escapeSsml(text)}</prosody></voice></speak>`;
 }
 
 export class AzureSynthesizer implements Synthesizer {

@@ -32,6 +32,13 @@ describe("AzureSynthesizer", () => {
     expect(ssml).toContain("Привіт");
   });
 
+  it("gives an English voice its own language instead of Ukrainian", () => {
+    const ssml = azureSsml("opencode is ready", "en-US-JennyNeural");
+
+    expect(ssml).toContain('xml:lang="en-US"');
+    expect(ssml).toContain('name="en-US-JennyNeural"');
+  });
+
   it("posts SSML to the region host and keeps the WAV", async () => {
     const dir = workDir();
     let seen: { url?: string; headers?: Record<string, string>; body?: string } = {};
