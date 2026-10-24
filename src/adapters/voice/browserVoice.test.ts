@@ -487,6 +487,18 @@ describe("BrowserVoice speech", () => {
     expect(fs.readdirSync(v.workDir)).toEqual([]);
   });
 
+  it("speaks each sentence of an answer as its own clip", async () => {
+    const v = speaking();
+    dirs.push(v.workDir);
+    const handle = await v.start();
+    await v.voice.whenIdle();
+
+    await handle.speak("Готово. Далі працюємо.");
+
+    expect(v.synthesizer.texts).toEqual([ACK_TEXT, "Готово.", "Далі працюємо."]);
+    expect(v.sink.played).toHaveLength(2);
+  });
+
   it("strips Markdown before the voice reads it", async () => {
     const v = speaking({ ...BASE });
     dirs.push(v.workDir);
@@ -814,6 +826,21 @@ describe("planSpeech", () => {
 
     expect(parts.length).toBeGreaterThan(0);
     expect(parts.reduce((sum, part) => sum + part.text.length, 0)).toBeLessThanOrEqual(60);
+  });
+
+  it("keeps a whole sentence together when one voice reads both languages", () => {
+    const parts = planSpeech("Готово. Відкрий SignalConnector.", 400, false);
+
+    expect(parts.map((part) => part.text)).toEqual(["Готово.", "Відкрий SignalConnector."]);
+  });
+
+  it("does not end a sentence at the dot inside a filename", () => {
+    const parts = planSpeech("Готово. Дивись src/app.ts і все.", 400, false);
+
+    expect(parts.map((part) => part.text)).toEqual([
+      "Готово.",
+      "Дивись src/app.ts і все.",
+    ]);
   });
 });
 

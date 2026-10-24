@@ -144,16 +144,22 @@ export interface SpeechSegment {
   language: "uk" | "en";
 }
 
-export function planSpeech(text: string, maxChars: number): SpeechSegment[] {
+export function planSpeech(
+  text: string,
+  maxChars: number,
+  splitLanguages = true,
+): SpeechSegment[] {
   const clean = text.replace(/\s+/g, " ").trim();
   if (!clean || maxChars <= 0) return [];
-  const sentences = clean.match(/[^.!?…]+[.!?…]*/g) ?? [clean];
+  const sentences = clean.match(/.+?(?:[.!?…]+(?=\s|$)|$)/g) ?? [clean];
   const out: SpeechSegment[] = [];
   let used = 0;
   for (const sentence of sentences) {
-    const parts =
-      sentence.match(/[A-Za-z][A-Za-z0-9'’._-]*(?:\s+[A-Za-z][A-Za-z0-9'’._-]*)*|[^A-Za-z]+/g) ??
-      [sentence];
+    const parts = splitLanguages
+      ? (sentence.match(
+          /[A-Za-z][A-Za-z0-9'’._-]*(?:\s+[A-Za-z][A-Za-z0-9'’._-]*)*|[^A-Za-z]+/g,
+        ) ?? [sentence])
+      : [sentence];
     for (const part of parts) {
       const piece = part.trim();
       if (!piece || !/[A-Za-z\u0400-\u04FF]/.test(piece)) continue;
@@ -396,6 +402,12 @@ export class BrowserVoice implements VoicePort {
             prompt: this.config.transcriptionPrompt,
           })
         : undefined);
+    if (this.streamingTranscriber) {
+      // One line at boot, so the operator can tell which path heard the room.
+      this.logger.info("voice: streaming recognition", {
+        model: this.config.streamingTranscriptionModel,
+      });
+    }
   }
 
   /** Pick the configured voice; "auto" keeps the best local one. */
@@ -645,9 +657,13 @@ export class BrowserVoice implements VoicePort {
       : applyPronunciations(speakable(text), this.config.pronunciations);
     const capped = capSpeech(prepared, this.config.maxSpeechChars);
     if (!capped) return Promise.resolve();
-    const segments = this.englishSynthesizer?.configured
-      ? planSpeech(capped, this.config.maxSpeechChars)
-      : [{ text: capped, language: "uk" as const }];
+    // Sentences are always separate clips, so the room hears the first one while
+    // the rest is made. Latin runs get their own voice only when one is set.
+    const segments = planSpeech(
+      capped,
+      this.config.maxSpeechChars,
+      this.englishSynthesizer?.configured === true,
+    );
     if (segments.length === 0) return Promise.resolve();
     let last: Promise<void> = Promise.resolve();
     // Each segment is queued on its own: the first sentence reaches the room
