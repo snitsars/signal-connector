@@ -15,6 +15,8 @@ export class FakeAgent implements AgentPort {
   readonly newSessions: string[] = [];
   private handlers: ((e: AgentEvent) => void)[] = [];
   private seq = 0;
+  /** Set to make startTask fail, as a disconnected plugin would. */
+  failStart: string | undefined;
 
   async start(): Promise<void> {}
   async stop(): Promise<void> {}
@@ -23,6 +25,7 @@ export class FakeAgent implements AgentPort {
   }
 
   async startTask(input: StartTaskInput): Promise<{ sessionId: string }> {
+    if (this.failStart) throw new Error(this.failStart);
     const sessionId = input.sessionId ?? `session-${++this.seq}`;
     this.started.push({ ...input, sessionId });
     return { sessionId };

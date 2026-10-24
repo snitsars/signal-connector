@@ -10,6 +10,8 @@ import {
   applyPronunciations,
   BrowserVoice,
   capSpeech,
+  echoesPrompt,
+  isBackchannel,
   matchesLanguage,
   planSpeech,
   type SpeechSink,
@@ -284,6 +286,20 @@ describe("BrowserVoice", () => {
 
     expect(v.transcriber.calls).toHaveLength(1);
     expect(v.utterances).toHaveLength(1);
+  });
+
+  it("drops a transcript that is the vocabulary prompt coming back", async () => {
+    const prompt = "SignalConnector, opencode, GitHub, Jitsi";
+    const v = makeVoice({ ...BASE, transcriptionPrompt: prompt });
+    dirs.push(v.workDir);
+    v.transcriber.result = { ok: true, text: prompt };
+    await v.start();
+    for (let i = 0; i < 3; i++) v.voice.push(speechFrame());
+    for (let i = 0; i < 9; i++) v.voice.push(silenceFrame());
+    await v.voice.whenIdle();
+
+    expect(v.voice.drops).toBe(1);
+    expect(v.utterances).toHaveLength(0);
   });
 
   it("reports the room's level as it hears it", async () => {
@@ -717,6 +733,48 @@ describe("BrowserVoice speech", () => {
     await handle.stopSpeaking();
     expect(v.sink.stops).toBe(1);
     expect(v.sink.speaking).toBe(false);
+  });
+});
+
+describe("isBackchannel", () => {
+  it("recognises a bare acknowledgement", () => {
+    expect(isBackchannel("Угу.")).toBe(true);
+    expect(isBackchannel("ага")).toBe(true);
+    expect(isBackchannel("ок, добре")).toBe(true);
+    expect(isBackchannel("  Зрозумів!  ")).toBe(true);
+    expect(isBackchannel("Все добре.")).toBe(true);
+    expect(isBackchannel("Точно.")).toBe(true);
+  });
+
+  it("keeps a real command", () => {
+    expect(isBackchannel("ну начнем")).toBe(false);
+    expect(isBackchannel("почнемо з опенсорсного часу")).toBe(false);
+    expect(isBackchannel("так, зроби це")).toBe(false);
+    expect(isBackchannel("які зміни були останні?")).toBe(false);
+  });
+});
+
+describe("echoesPrompt", () => {
+  const prompt =
+    "SignalConnector, opencode, GitHub, Jitsi, TypeScript, npm, API, JSON, деплой, тікет, сесія";
+
+  it("recognises the vocabulary prompt coming back verbatim", () => {
+    expect(echoesPrompt(prompt, prompt)).toBe(true);
+    expect(echoesPrompt("  SignalConnector,   opencode...  ", "SignalConnector, opencode")).toBe(true);
+  });
+
+  it("recognises a truncated echo of the list", () => {
+    expect(echoesPrompt("SignalConnector, opencode, GitHub, Jitsi, TypeScript", prompt)).toBe(true);
+  });
+
+  it("never drops a real question that mentions a product", () => {
+    expect(echoesPrompt("opencode не відповідає", prompt)).toBe(false);
+    expect(echoesPrompt("які зміни були останні?", prompt)).toBe(false);
+    expect(echoesPrompt("відкрий SignalConnector", prompt)).toBe(false);
+  });
+
+  it("does nothing when no prompt is configured", () => {
+    expect(echoesPrompt(prompt, "   ")).toBe(false);
   });
 });
 

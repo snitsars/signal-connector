@@ -1255,7 +1255,25 @@ export class CoreApp {
       );
       return;
     }
-    await this.runTask(project, text, { voice: true, meetingStartedAt: active.startedAt });
+    try {
+      await this.runTask(project, text, { voice: true, meetingStartedAt: active.startedAt });
+    } catch (err: unknown) {
+      // The room heard the question and the group saw it; a backend that is not
+      // connected must not leave both silent. Say why, aloud and in the group.
+      const reason = String(err);
+      this.logger.warn("voice: could not start the task", { error: reason });
+      const offline = /no plugin connected/i.test(reason);
+      this.speakInMeeting(
+        active.projectId,
+        offline
+          ? "Я не бачу opencode: він не підключений. Запусти його, і я продовжу."
+          : "Не вдалося почати задачу. Деталі я написав у групі.",
+      );
+      await this.sendProject(
+        active.projectId,
+        `${MARK.attention} **Voice task not started** · ${reason}`,
+      );
+    }
   }
 
   /** A failure the operator must hear: no transcriber, a failed run. */

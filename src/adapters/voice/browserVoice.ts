@@ -171,6 +171,80 @@ export function planSpeech(
   return out;
 }
 
+/**
+ * True when a transcript is the recogniser's own vocabulary prompt coming back.
+ * Hosted models do this on poor or silent audio: instead of an empty result they
+ * repeat the hint, which used to become a task. The comparison is on normalized
+ * words and tolerates a truncated echo of the list.
+ */
+export function echoesPrompt(text: string, prompt: string): boolean {
+  const normalize = (value: string): string =>
+    value
+      .toLowerCase()
+      .normalize("NFKC")
+      .replace(/[^\p{L}\p{N}]+/gu, " ")
+      .trim();
+  const spoken = normalize(text);
+  const vocabulary = normalize(prompt);
+  if (!spoken || !vocabulary) return false;
+  if (spoken === vocabulary) return true;
+  // A short real question that happens to name one product is not an echo.
+  if (spoken.length < vocabulary.length * 0.5) return false;
+  const allowed = new Set(vocabulary.split(" "));
+  return spoken.split(" ").every((word) => allowed.has(word));
+}
+
+/** The fillers a room says to itself; none of them is a task for the agent. */
+const BACKCHANNELS = new Set([
+  "угу",
+  "ага",
+  "так",
+  "ок",
+  "окей",
+  "ok",
+  "okay",
+  "добре",
+  "гаразд",
+  "зрозумів",
+  "зрозуміла",
+  "да",
+  "ні",
+  "нет",
+  "no",
+  "yes",
+  "все",
+  "супер",
+  "клас",
+  "чудово",
+  "точно",
+  "правильно",
+  "вірно",
+  "дякую",
+  "спасибі",
+  "thanks",
+  "hm",
+  "hmm",
+  "mm",
+  "mmm",
+  "uh",
+  "uhhuh",
+]);
+
+/**
+ * True for a bare acknowledgement ("угу", "ок", "добре"). Those are the sounds
+ * of a conversation, not instructions: turning each one into an agent task
+ * clogs the session and leaves the room waiting behind noise.
+ */
+export function isBackchannel(text: string): boolean {
+  const words = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0 || words.length > 2) return false;
+  return words.every((word) => BACKCHANNELS.has(word));
+}
+
 export interface SpeechState {
   speaking: boolean;
   queued: number;
@@ -934,6 +1008,17 @@ export class BrowserVoice implements VoicePort {
     }
     if (!result.text) {
       this.countDrop("blank transcript");
+      return;
+    }
+    if (echoesPrompt(result.text, this.config.transcriptionPrompt)) {
+      // Hosted models repeat their vocabulary hint when the audio is unclear;
+      // that is noise, not a question, and must never become a task.
+      this.countDrop("the recogniser echoed its vocabulary prompt");
+      return;
+    }
+    if (isBackchannel(result.text)) {
+      // "Угу", "ок", "добре": the room acknowledged, it did not ask for work.
+      this.logger.debug("voice: ignored a backchannel", { chars: result.text.length });
       return;
     }
     if (!matchesLanguage(result.text, this.config.language)) {

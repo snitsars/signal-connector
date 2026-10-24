@@ -1603,6 +1603,21 @@ describe("voice in the meeting", () => {
     await ctx.app.stop();
   });
 
+  it("says aloud when the agent backend is not connected", async () => {
+    await inRoom();
+    ctx.agent.failStart = "no plugin connected for project signalconnector";
+
+    voice.utterance("ти мене чуєш?");
+    await tick();
+    await tick();
+
+    expect(said()).toContain(
+      "Я не бачу opencode: він не підключений. Запусти його, і я продовжу.",
+    );
+    expect(ctx.signal.sent.some((m) => m.text.includes("Voice task not started"))).toBe(true);
+    await ctx.app.stop();
+  });
+
   it("speaks a waiting permission and leaves the group prompt unchanged", async () => {
     await inRoom();
     ctx.signal.emitMessage(incomingIn(projectChannel(ctx), "do work"));
